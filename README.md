@@ -27,9 +27,9 @@ You need **Python 3.10+** installed on your system.
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/YOUR_USERNAME/REPO_NAME.git](https://github.com/YOUR_USERNAME/REPO_NAME.git)
-    cd REPO_NAME
-    ```
+    git clone https://github.com/jayballz69/Jamies-Media-Command.git
+    cd Jamies-Media-Command
+    python jamies_media_command.py
 
 2.  **Install dependencies:**
     ```bash
