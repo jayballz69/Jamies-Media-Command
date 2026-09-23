@@ -1,0 +1,23 @@
+<!-- Collection Manager web interface: local assets, live server data, no external resources. -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#111315">
+    <meta name="description" content="Thoughtful collections for the library you already love.">
+    <title>Collection Manager</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%2317191c'/%3E%3Cpath d='M10 11h14v19H10zM27 14h3v16h-3z' fill='%23e6a37f'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/static/app.css">
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div id="app"><main class="boot-screen" id="main"><div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div><p role="status">Opening your library…</p></main></div>
+    <div id="toasts" class="toast-stack" role="status" aria-live="polite" aria-atomic="false"></div>
+    <dialog id="collection-dialog" class="collection-dialog" aria-labelledby="dialog-title"></dialog>
+    <dialog id="create-dialog" class="create-dialog" aria-labelledby="create-title"></dialog>
+    <noscript><p class="noscript">Enable JavaScript to use Collection Manager.</p></noscript>
+  </body>
+</html>

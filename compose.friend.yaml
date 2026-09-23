@@ -1,0 +1,33 @@
+# Portable standalone install. See docs/SHARING_INSTALL.md.
+name: collection-manager
+services:
+  collection-manager:
+    build: .
+    image: collection-manager:local
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      CM_HOST: 0.0.0.0
+      CM_PORT: "8780"
+      CM_DATA_DIR: /data
+      CM_SECURE_COOKIE: "${CM_SECURE_COOKIE:-0}"
+      CM_PUBLIC_ORIGIN: "${CM_PUBLIC_ORIGIN:-}"
+    ports:
+      - "${VM_LAN_IP:-127.0.0.1}:${CM_PORT:-8780}:8780"
+    volumes:
+      - "${CM_DATA_PATH:-./web-data}:/data"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    mem_limit: 768m
+    cpus: 2
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"

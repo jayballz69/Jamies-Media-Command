@@ -1,0 +1,7 @@
+**
+!Dockerfile
+!requirements-web.txt
+!collection_web/
+!collection_web/**
+collection_web/**/__pycache__/
+collection_web/**/*.pyc
