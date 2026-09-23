@@ -178,3 +178,25 @@ backups or browser/deployment artifacts. `.env` and the default `web-data/`
 directory are ignored by the repository. A custom data directory should live
 outside the checkout. The friend starts with their own password, services and
 library; your running instance and collections are not copied to their VM.
+
+## Android: nzb360 and Tailscale
+
+Add the app through nzb360 **Settings > Services > Add service > Web Interface**
+(menu wording may vary by version). Name it Collection Manager, enter the app's
+full URL and choose **Fetch Favicon** to use its included icon. Leave **Use external
+browser** off to open it inside nzb360. Sign in with the account created on your
+instance; no API key or HTTP Basic Auth is needed. Web Interfaces may require PRO.
+If the embedded view has a login problem, enable Use external browser.
+
+For remote access, connect the phone and VM to your Tailscale network, then use
+`http://<VM_TAILSCALE_IP>:8780`. Keep Tailscale connected when using that address.
+The app must listen on the VM's Tailscale address as well as any desired LAN address;
+the default friend Compose file binds only the address specified by `VM_LAN_IP`.
+To expose only through Tailscale, set that variable to the VM's Tailscale IPv4 address
+and recreate the container. Tailnet access rules must permit the connection.
+The app contacts Plex and Arr from the VM, so its configured service URLs need not
+change for mobile use. Do not add router port forwards for this setup.
+
+The icon is also available at `/static/icon.png` and `/favicon.ico`, without login.
+See the [developer's favicon announcement](https://www.reddit.com/r/nzb360/comments/qkv3iz/)
+and [remote-access guide](https://github.com/Kev1000000/nzb360Guides/blob/main/remoteaccessguide.html).

@@ -116,6 +116,10 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
     def index():
         return app.send_static_file("index.html")
 
+    @app.get("/favicon.ico")
+    def favicon():
+        return app.send_static_file("favicon.ico")
+
     @app.get("/healthz")
     def health():
         with store.connect() as database:
