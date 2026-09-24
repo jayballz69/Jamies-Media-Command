@@ -428,6 +428,7 @@ function renderSettings() {
       ${[['halloween','Halloween','17-31 October: primarily spooky seasonal shelves.'],['christmas','Christmas','11-25 December: primarily festive shelves.'],['easter','Easter','Seven days before Easter Sunday through Easter Monday.'],['st_patrick',"St Patrick's Day",'14-17 March: a few Irish stories and creative voices.'],['qld_school','Queensland school holidays','More choices for ages 10-16. Uses state-school dates; ratings and stories inform curation, not a parental-control guarantee.'],['new_year','New Year','29 December-1 January: fresh starts and reinvention.'],['valentine',"Valentine's Day",'11-14 February: different kinds of romance.'],['star_wars','May the Fourth','2-4 May: Star Wars and distinct space adventures.']].map(([key,label,note]) => toggle('seasonal_'+key,label,note,a['seasonal_'+key] ?? !['new_year','valentine','star_wars'].includes(key))).join('')}
       <p class="detail-note">Dates use Australia/Brisbane. Queensland holiday dates are published through October 2029; later dates will need updating. ${state.seasonal?.school_calendar_current === false ? 'School-holiday coverage is unavailable for the current date.' : ''} A changed occasion can trigger one new pool; ordinary switching does not make AI calls.</p></div></details>
       <details class="settings-details" id="advanced-settings"><summary>${icon('settings')}<span><strong>Advanced settings</strong><small>Fine-tune what runs, what gets suggested, and what goes on Home.</small></span>${icon('chevron')}</summary><div class="advanced-body">
+      ${state.family_shelf ? `<label class="toggle-row"><span class="toggle-copy"><span>Keep the pinned family shelf fresh</span><small>Automatically update ${esc(getCollection(state.family_shelf.shelf_id)?.name || 'your family shelf')} with the newest 25 family movies. Off pauses additions and rollover; the current shelf stays pinned. Applies immediately.</small></span><span class="switch"><input type="checkbox" data-family-toggle ${state.family_shelf.enabled ? 'checked' : ''} aria-label="Keep the pinned family shelf fresh"><span class="switch-track"></span></span></label>` : ''}
       ${toggle('sync_enabled', 'Keep the library and requested arrivals up to date', 'Refresh Plex automatically and track requested arrivals. Drift additions pass a fresh fit review before joining a live collection.', a.sync_enabled !== false)}
       ${field('library_sync_minutes', 'Library refresh interval (minutes)', s.library_sync_minutes ?? 10, {type:'number', min:5, max:1440})}
       ${toggle('new_arrival_suggestions', 'Suggest collection homes for new arrivals', 'Review newly synced movies and series once a day against your permanent collections. Suggestions wait for your approval.', !!a.new_arrival_suggestions)}
@@ -723,12 +724,20 @@ document.addEventListener('input', event => {
     query = event.target.value;
     document.querySelector('#collection-results').innerHTML = collectionResults();
   }
-  if (event.target.closest('#settings-form')) {
+  if (event.target.closest('#settings-form') && !event.target.matches('[data-family-toggle]')) {
     settingsDirty = true;
     document.querySelector('#settings-save-note').textContent = 'You have unsaved changes.';
   }
 });
 document.addEventListener('change', async event => {
+  if (event.target.matches('[data-family-toggle]')) {
+    const input=event.target; const enabled=input.checked; input.disabled=true;
+    try {
+      const result=await runAction(input, '/api/family-shelf', {enabled}, enabled ? 'Enabling family shelf updates.' : 'Pausing family shelf updates.');
+      if (!result) input.checked=!enabled;
+    } finally {input.disabled=false;}
+    return;
+  }
   if (event.target.matches('[data-arrivals-toggle]')) {
     const input=event.target; const enabled=input.checked; input.disabled=true;
     try { await api('/api/settings', {method:'POST', body:{advanced:{new_arrival_suggestions:enabled}}}); await refresh(); toast(enabled ? 'New-arrival suggestions on.' : 'New-arrival suggestions paused.'); }
