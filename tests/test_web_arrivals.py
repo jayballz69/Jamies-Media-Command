@@ -71,3 +71,32 @@ def test_actor_arrival_review_uses_the_same_verified_credit_rule_as_generation()
     payload = json.loads(model.prompts[0].split("\nINPUT_JSON:\n")[1])["candidate"]
     assert payload["scoped"] is False
     assert payload["inclusion_basis"] == "verified_entity_credit"
+
+
+def test_arrival_editor_reviews_only_changed_shelf_with_neighbours_as_context():
+    library, batch, source, replacement, model = setup()
+    source['permanent'] = True
+    review_drift_additions(source,replacement,{'library':library,'collections':batch},model)
+    payload=json.loads(model.prompts[-1].split('\nINPUT_JSON:\n')[1])
+    assert [c['id'] for c in payload['candidates']]==[source['id']]
+    assert len(payload['neighbours'])==len(batch)-1
+    assert payload['new_ids']==[library[20]['id']]
+
+
+def test_one_weak_addition_keeps_strong_additions_after_fresh_subset_review():
+    library,batch,source,replacement,model=setup()
+    replacement['items'].append(library[21])
+    weak=library[21]['id']
+    def mixed(prompt):
+        answer=model(prompt)
+        if '"stage":"locked_review"' in prompt:
+            for row in answer['item_reviews']:
+                if row['id']==weak:
+                    row.update(fit=3,reason='Identity theft is not the same as living as someone else.')
+                    answer['approved']=False
+        return answer
+    result=review_drift_additions(source,replacement,{'library':library,'collections':batch},mixed)
+    assert len(result['items'])==6
+    assert weak not in {i['id'] for i in result['items']}
+    assert result['arrival_rejections'][weak].startswith('Identity theft')
+    assert validate_candidate(result,library)==[]

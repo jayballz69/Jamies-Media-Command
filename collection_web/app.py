@@ -15,7 +15,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from flask import Flask, Response, jsonify, request, send_file, session
+from flask import Flask, Response, g, jsonify, request, send_file, session
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.exceptions import HTTPException
 
@@ -109,8 +109,15 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
         return jsonify(service.submit(kind, operation)), 202
 
     def idle():
+        service.lock.acquire()
+        g.collection_mutation_locked = True
         if service.busy:
             raise DomainError("Wait for the current task to finish before changing this.")
+
+    @app.teardown_request
+    def release_mutation_lock(error=None):
+        if g.pop('collection_mutation_locked',False):
+            service.lock.release()
 
     @app.get("/")
     def index():

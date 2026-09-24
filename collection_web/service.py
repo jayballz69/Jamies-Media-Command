@@ -109,6 +109,8 @@ def possible_matches(row, library):
     title, year = providers.clean(row["title"]), row["year"]
     matches = []
     for item in library:
+        if row.get('media_type') and item.get('media_type') != row['media_type']:
+            continue
         actual = providers.clean(item["title"])
         close_year = not item.get("year") or abs(item["year"] - year) <= 1
         alias = min(len(title), len(actual)) >= 12 and (actual.startswith(title + " ") or title.startswith(actual + " "))
@@ -195,8 +197,16 @@ class Service:
             self.busy = True
             job = {"id": uuid.uuid4().hex, "kind": kind, "status": "running", "message": "Starting…",
                    "started_at": time.time(), "finished_at": 0}
-            self.store.update(lambda state: state["jobs"].insert(0, job))
-            self.executor.submit(self._run, job["id"], operation)
+            try:
+                self.store.update(lambda state: state["jobs"].insert(0, job))
+                self.executor.submit(self._run, job["id"], operation)
+            except Exception:
+                self.busy = False
+                try:
+                    self._job(job['id'],status='failed',message='The task could not be started. Retry.',finished_at=time.time())
+                except Exception as error:
+                    LOG.error('Could not record failed submission (%s)',type(error).__name__)
+                raise
             return job
 
     def _job(self, identity, **changes):
@@ -307,7 +317,7 @@ class Service:
                 continue
             progress("Adding newly available titles to " + candidate["name"] + "…")
             try:
-                self._add_items(candidate, arrived, state, progress)
+                added_count = self._add_items(candidate, arrived, state, progress)
             except DomainError as error:
                 self.store.update(lambda current, message=str(error): event(current, "Arrival update deferred: " + message, "warning"))
                 if candidate.get("origin") == "drift":
@@ -318,7 +328,7 @@ class Service:
                                 row["arrival_review_error"] = str(error)
                     self.store.update(mark)
                 continue
-            self.store.update(lambda current, name=candidate["name"], count=len(arrived): event(current, f"Added {count} newly available requested titles to {name}."))
+            self.store.update(lambda current, name=candidate["name"], count=added_count: event(current, f"Added {count} newly available requested titles to {name}."))
 
     def _add_items(self, candidate, additions, state, progress):
         if candidate.get('family_rolling'):
@@ -332,12 +342,17 @@ class Service:
             replacement = review_drift_additions(candidate, replacement, state,
                                                 lambda prompt: providers.call_llm(state["settings"], prompt))
         reconcile_suggestions(replacement, state["library"])
+        rejected = replacement.pop('arrival_rejections', {})
+        for item in replacement.get('available', []):
+            if str(item['id']) in rejected:
+                item['arrival_review_error'] = rejected[str(item['id'])]
         if candidate["status"] == "published":
             if not candidate.get("managed"):
                 raise DomainError("Choose Manage rotation here before adding titles to this Plex collection.")
             self.store.backup()
             providers.publish(state["settings"], replacement, state["server_id"], expected_source=candidate)
         self.store.update(lambda current: collection_by_id(current, candidate["id"]).update(replacement))
+        return len({str(i['id']) for i in replacement['items']} - {str(i['id']) for i in candidate['items']})
 
     def add_available(self, identity, payload, progress):
         state = self.store.read()
@@ -348,8 +363,8 @@ class Service:
         rows = [row for row in candidate["available"] if payload.get("all") is True or str(row["id"]) == str(payload.get("item_id"))]
         if not rows:
             raise DomainError("That suggestion is no longer available to add. Refresh this collection.")
-        self._add_items(candidate, rows, state, progress)
-        return f"Added {len(rows)} owned titles to {candidate['name']}."
+        count = self._add_items(candidate, rows, state, progress)
+        return f"Added {count} owned titles to {candidate['name']}." + (f" {len(rows)-count} remain for fit review." if count < len(rows) else '')
 
     def generate(self, progress):
         from .curation import generate_batch
