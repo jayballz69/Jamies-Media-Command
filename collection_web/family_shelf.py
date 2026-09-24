@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import math
 import time
 import uuid
 
@@ -21,6 +22,57 @@ def evidence(item):
 
 def fingerprint(item):
     return hashlib.sha256(json.dumps(evidence(item),sort_keys=True).encode()).hexdigest()
+
+
+def audience_score(movie):
+    """Only use known ten-point audience sources, never critic percentages."""
+    ratings = movie.get('ratings', {})
+    if not isinstance(ratings, dict):
+        return None
+    for source in ('imdb', 'tmdb'):
+        row = ratings.get(source, {})
+        if not isinstance(row, dict):
+            continue
+        value, votes = row.get('value'), row.get('votes')
+        if (type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 10
+                or type(votes) is not int or votes < 100):
+            continue
+        return {'source':source, 'score':value, 'votes':votes}
+    return None
+
+
+def refresh_audience(service, state):
+    """One catalog read daily; outage retains verified scores and eligibility."""
+    config = state['family_shelf']
+    if time.time() - config.get('audience_checked_at', 0) < 86400:
+        return config.get('audience_scores', {})
+    settings = state['settings']
+    if not settings.get('radarr_url') or not settings.get('radarr_key'):
+        return config.get('audience_scores', {})
+    try:
+        movies = providers.arr_request(settings, 'radarr', 'GET', '/movie')
+        if not isinstance(movies, list):
+            raise DomainError('Invalid movie catalog.')
+        catalog = {}
+        for movie in movies:
+            if isinstance(movie, dict):
+                catalog.setdefault((providers.clean(movie.get('title','')), movie.get('year')), []).append(movie)
+        scores = {}
+        for item in state['library']:
+            if item['media_type'] != 'movie':
+                continue
+            matches = catalog.get((providers.clean(item['title']), item['year']), [])
+            if len(matches) == 1 and providers.catalog_title_matches(matches[0], item):
+                score = audience_score(matches[0])
+                if score:
+                    scores[str(item['id'])] = score
+        service.store.update(lambda s:s['family_shelf'].update(audience_scores=scores,
+            audience_checked_at=time.time(), audience_error=''))
+        return scores
+    except (DomainError, ValueError, TypeError):
+        service.store.update(lambda s:s['family_shelf'].update(
+            audience_checked_at=time.time(), audience_error='Audience scores could not refresh. Previous scores retained; retry tomorrow.'))
+        return config.get('audience_scores', {})
 
 
 def classify(rows, llm):
@@ -43,11 +95,14 @@ INPUT_JSON:
     return decisions
 
 
-def select(library, decisions, library_id):
+def select(library, decisions, library_id, audience_scores=None):
     rows = sorted([i for i in library if i['media_type']=='movie' and str(i['library_id'])==str(library_id)
                    and i.get('added_at',0)>0], key=lambda i:(i['added_at'],str(i['id'])),reverse=True)
     selected, pending = [], []
     for item in rows:
+        audience = (audience_scores or {}).get(str(item['id']))
+        if audience and audience['score'] < 6:
+            continue
         rating = str(item.get('content_rating') or '').upper().strip()
         if rating in {'R','NC-17','TV-MA','MA15+','R18+','18','AU/MA15+','AU/R18+'}:
             continue
@@ -55,7 +110,7 @@ def select(library, decisions, library_id):
         if decision.get('fingerprint') != fingerprint(item):
             pending.append(item)
         elif decision.get('eligible'):
-            selected.append(dict(item,reason=decision['reason']))
+            selected.append(dict(item,reason=decision['reason'], audience_review=audience))
         if len(selected)>=CAP:
             break
     return selected[:CAP], pending[:60]
@@ -107,9 +162,11 @@ def refresh(service, progress):
     service.store.update(lambda s:s['family_shelf'].update(last_attempt_at=time.time()))
     decisions = copy.deepcopy(config['decisions'])
     try:
+        progress('Checking audience scores for family movie night...')
+        audience_scores = refresh_audience(service, state)
         # Normally one small arrival batch. Initial fill can inspect further back.
         for _ in range(4):
-            chosen, pending = select(state['library'],decisions,config['library_id'])
+            chosen, pending = select(state['library'],decisions,config['library_id'],audience_scores)
             if not pending:
                 break
             progress(f"Reviewing {len(pending)} recently added films for family movie night...")
@@ -117,7 +174,7 @@ def refresh(service, progress):
             for item in pending:
                 decisions[str(item['id'])] = dict(results[str(item['id'])],fingerprint=fingerprint(item))
             service.store.update(lambda s:s['family_shelf'].update(decisions=copy.deepcopy(decisions)))
-        chosen, pending = select(state['library'],decisions,config['library_id'])
+        chosen, pending = select(state['library'],decisions,config['library_id'],audience_scores)
         if pending:
             raise DomainError('Family review is still filling its cache. Refresh again to continue; existing shelves are retained.')
         if not chosen:
@@ -140,6 +197,8 @@ def refresh(service, progress):
                 **({'expected_source':source} if source.get('plex_id') else {}))
             replacement.update(plex_id=plex_id,status='published',managed=True)
             service.store.update(lambda s:collection_by_id(s,source['id']).update(replacement))
+        else:
+            service.store.update(lambda s:collection_by_id(s,source['id']).update(items=chosen))
         providers.set_collection_order(state['settings'],replacement,state['server_id'])
         if state['settings']['advanced']['home_enabled']:
             providers.set_visibility(state['settings'],replacement,True,state['server_id'])

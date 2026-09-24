@@ -242,7 +242,10 @@ On **Rotation**, open **Pin a recent family movie shelf**, choose a name and an
 existing managed movie collection to receive older picks. The app fills a shelf
 with up to 25 recently added, family-suitable films for roughly ages 10–16 plus
 adults. Recency uses Plex's added date rather than theatrical release date.
-The curator assesses story, rating and metadata; animation or a PG rating alone
+Audience quality is checked daily from your Radarr catalog: IMDb is preferred,
+with TMDb as fallback, requiring at least 100 votes and 6/10. Missing or low-vote
+scores remain eligible for family-fit review. Catalog outages retain previous
+scores. These lookups do not use AI tokens. The curator assesses story, rating and metadata; animation or a PG rating alone
 does not establish suitability. This remains guidance rather than parental control.
 
 The shelf is pinned independently of ordinary rotation slots, while the global

@@ -85,3 +85,33 @@ def test_classifier_requires_complete_boolean_decisions():
     assert family.classify(rows,lambda _:dict(movies=[dict(id='1',eligible=True,reason='Family adventure')]))['1']['eligible']
     for result in [dict(movies=[]),dict(movies=[dict(id='1',eligible='true',reason='Guess')]),dict(movies=[dict(id='invented',eligible=True,reason='Guess')])]:
         with pytest.raises(DomainError):family.classify(rows,lambda _:result)
+
+
+def test_audience_votes_source_preference_and_boundary(configured):
+    assert family.audience_score({'ratings':{'imdb':{'value':5,'votes':99}}}) is None
+    assert family.audience_score({'ratings':{'rottenTomatoes':{'value':99,'votes':500}}}) is None
+    score=family.audience_score({'ratings':{'imdb':{'value':5,'votes':100},'tmdb':{'value':8,'votes':900}}})
+    assert score['source']=='imdb' and score['score']==5
+    assert family.audience_score({'ratings':{'imdb':{'value':5,'votes':1},'tmdb':{'value':6,'votes':100}}})['score']==6
+    for value in [float('nan'),float('inf'),-1,11,True,'6']:
+        assert family.audience_score({'ratings':{'imdb':{'value':value,'votes':100}}}) is None
+    store,_=configured;s=store.read()
+    chosen,_=family.select(s['library'],s['family_shelf']['decisions'],'1',{'26':score})
+    assert len(chosen)==25 and chosen[0]['id']=='25' and chosen[-1]['id']=='1'
+    chosen,_=family.select(s['library'],s['family_shelf']['decisions'],'1',{'26':dict(score,score=6)})
+    assert chosen[0]['id']=='26'
+
+
+def test_audience_cache_exact_identity_and_outage(configured):
+    store,service=configured
+    store.update(lambda s:s['settings'].update(radarr_url='http://example.invalid',radarr_key='test-only'))
+    catalog=[dict(title='Family film 26',year=2026,ratings={'imdb':{'value':5,'votes':200}}),
+             dict(title='Family film 25',year=1900,ratings={'imdb':{'value':2,'votes':200}})]
+    with patch('collection_web.integrations.arr_request',return_value=catalog) as request:
+        assert set(family.refresh_audience(service,store.read()))=={'26'}
+        family.refresh_audience(service,store.read())
+        assert request.call_count==1
+    store.update(lambda s:s['family_shelf'].update(audience_checked_at=0))
+    with patch('collection_web.integrations.arr_request',side_effect=DomainError('Offline')):
+        assert family.refresh_audience(service,store.read())['26']['score']==5
+    assert store.read()['family_shelf']['audience_error']
