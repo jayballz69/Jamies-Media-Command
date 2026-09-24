@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uuid
 
 from . import integrations as providers
+from .seasonal import active_events, context_key, seasonal_rank
 from .store import DEFAULT_SETTINGS, DomainError, SECRETS, event
 
 
@@ -95,7 +96,7 @@ def match_titles(titles, library, media_type):
         else:
             missing.append({"title": title, "year": year, "media_type": media_type,
                             "reason": "Ambiguous library match" if matches else row.get("reason", "Not in the synced library")})
-            for key in ("requested_at", "request_status", "fit_reason", "metadata", "metadata_status", "metadata_checked_at", "fit_status"):
+            for key in ("requested_at", "request_status", "fit_reason", "metadata", "metadata_status", "metadata_checked_at", "metadata_error", "fit_status", "request_progress", "request_error", "request_checked_at"):
                 if key in row:
                     missing[-1][key] = row[key]
     if owned and len({r["library_id"] for r in owned}) > 1:
@@ -155,7 +156,7 @@ def reconcile_suggestions(candidate, library):
         owned, absent = match_titles([row], library, candidate["media_type"])
         if owned:
             item = owned[0]
-            for field in ("requested_at", "request_status", "arrival_review_error"):
+            for field in ("requested_at", "request_status", "arrival_review_error", "request_progress", "request_error", "request_checked_at"):
                 if field in row:
                     item[field] = row[field]
             available.append(item)
@@ -350,6 +351,11 @@ class Service:
         from .curation import generate_batch
         state = self.store.read()
         settings = state["settings"]
+        seasons = active_events(settings)
+        if any(event["kind"] == "qld_school" for event in seasons) and state["library"] and not any("content_rating" in row for row in state["library"]):
+            progress("Refreshing library age classifications for school-holiday curation...")
+            self.sync(progress)
+            state = self.store.read()
         rows = copy.deepcopy(state["library"])
         if not state["synced_at"]:
             raise DomainError("Sync your Plex library before generating Drift.")
@@ -378,7 +384,7 @@ class Service:
                                "batch_size": pool_size, "minimum_batch_size": max(2, settings["drift_slots"]),
                                "show_slots": pool_tv,
                                "movie_slots": pool_size - pool_tv,
-                               "allow_partial": True, "creative_editor": efficient, "adjudicate": True, "previous_degraded_count": previous, "diversity": settings["advanced"]["diversity"]},
+                               "seasonal_events": seasons, "allow_partial": True, "creative_editor": efficient or bool(seasons), "adjudicate": True, "previous_degraded_count": previous, "diversity": settings["advanced"]["diversity"]},
                                curator, progress)
         if efficient:
             input_tokens = sum(u.get("prompt_tokens", 0) for u in usage)
@@ -413,11 +419,14 @@ class Service:
             # Keep reviewed discoveries between runs. Fill remaining Home slots
             # from the previous active shelves; an incomplete run is useful.
             prior_pool = set(current["drift"].get("pool_ids", []))
+            retained_seasonal = [c["id"] for c in current["collections"] if c["id"] in prior_pool
+                and self.temporary(c) and c["status"] != "archived" and seasonal_rank(c, seasons) < 0]
             for old in current["collections"]:
-                if old["id"] in prior_pool and self.temporary(old) and not old.get("home"):
+                if old["id"] in prior_pool and old["id"] not in retained_seasonal and self.temporary(old) and not old.get("home"):
                     old.update(status="archived", rotation_enabled=False, retired_at=time.time())
             current["collections"].extend(collections + reserves)
-            current["drift"]["pool_ids"] = [c["id"] for c in collections + reserves]
+            current["drift"]["pool_ids"] = [c["id"] for c in collections + reserves] + retained_seasonal
+            current["drift"]["seasonal_context"] = context_key(seasons)
             current["drift"]["current_batch_ids"] = self._choose_pool(current)
             current["drift"]["incremental"] = True
             current["drift"]["last_generated_at"] = time.time()
@@ -505,7 +514,7 @@ class Service:
         for kind, count in (("movie", settings["drift_slots"] - settings["drift_tv_slots"]),
                             ("show", settings["drift_tv_slots"])):
             eligible = sorted((c for c in pool if c["media_type"] == kind),
-                              key=lambda c: (bool(c.get("home")), c.get("last_drift_shown_at", 0)))
+                              key=lambda c: (seasonal_rank(c, active_events(settings)), bool(c.get("home")), c.get("last_drift_shown_at", 0)))
             chosen.extend(eligible[:count])
         active = set(state["drift"].get("active_batch_ids", []))
         previous = [c for c in state["collections"] if c["id"] in active and self.temporary(c)
@@ -636,6 +645,7 @@ class Service:
             indices = [index]
         self.store.update(lambda current: collection_by_id(current, identity).update(auto_add_arrivals=True))
         done = 0
+        failures = []
         for index in indices:
             item = candidate["missing"][index]
             if item.get("requested_at") or item.get("reason") == "Ambiguous library match" or item.get("metadata_status") == "needs_check" or item.get("fit_status") in {"weak", "uncertain"}:
@@ -644,15 +654,70 @@ class Service:
             if owned or possible_matches(item, state["library"]):
                 continue
             progress("Requesting " + item["title"] + "…")
-            result = providers.request_title(state["settings"], item)
+            self.store.update(lambda current: collection_by_id(current, identity)["missing"][index].update(request_progress="Requesting", request_error=""))
+            try:
+                result = providers.request_title(state["settings"], item)
+            except DomainError as error:
+                message = str(error)
+                self.store.update(lambda current: collection_by_id(current, identity)["missing"][index].update(request_progress="Request failed", request_error=message))
+                failures.append(item["title"])
+                continue
             def mark(current):
                 target = collection_by_id(current, identity)["missing"][index]
-                target.update(requested_at=time.time(), request_status=result)
+                target.update(requested_at=time.time(), request_status=result, request_progress="Requested", request_error="")
                 event(current, item["title"] + ": " + result)
             self.store.update(mark)
             done += 1
         self.store.update(lambda current: reconcile_suggestions(collection_by_id(current, identity), current["library"]))
+        if failures:
+            raise DomainError(f"Processed {done} requests; {len(failures)} could not finish: " + ", ".join(failures) + ". Successful requests are saved. Check the title status and retry the remaining picks.")
         return f"Processed {done} missing-title requests."
+
+    def sweep_collections(self, progress):
+        from .sweep import review
+        state = self.store.read()
+        progress("Reviewing permanent collections together: distinctive themes and better-fit additions...")
+        report = review(state, lambda prompt: providers.call_llm(state["settings"], prompt))
+        report["created_at"] = time.time()
+        self.store.update(lambda current: current.update(collection_review=report))
+        return "Permanent collection review is ready on Collections. No titles were moved or requested."
+
+    def refresh_requests(self, progress):
+        from .requests_status import snapshot, progress_for
+        state = self.store.read()
+        tracked = [(c, item) for c in state["collections"] if c["status"] != "archived"
+                   for field in ("missing", "available") for item in c.get(field, []) if item.get("requested_at")]
+        snapshots = {}
+        for kind in {c["media_type"] for c, item in tracked}:
+            progress("Checking " + ("Sonarr" if kind == "show" else "Radarr") + " request progress...")
+            try:
+                snapshots[kind] = snapshot(state["settings"], kind)
+            except DomainError:
+                snapshots[kind] = None
+        now = time.time()
+        def save(current):
+            for c in current["collections"]:
+                if c["status"] == "archived":
+                    continue
+                members = {(providers.clean(i["title"]),i["year"]) for i in c.get("items", [])}
+                for field in ("missing", "available"):
+                    for item in c.get(field, []):
+                        if not item.get("requested_at"):
+                            continue
+                        owned, _ = match_titles([item], current["library"], c["media_type"])
+                        if (providers.clean(item["title"]), item["year"]) in members:
+                            label = "In collection" if c["status"] == "published" else "In draft"
+                        elif owned:
+                            label = "In Plex; awaiting collection review" if item.get("arrival_review_error") else "In Plex"
+                        elif snapshots.get(c["media_type"]) is not None:
+                            label = progress_for(item, c["media_type"], *snapshots[c["media_type"]])
+                        else:
+                            item["request_error"] = "Status unavailable; last known progress retained."
+                            continue
+                        item.update(request_progress=label, request_error="", request_checked_at=now)
+            current["requests_checked_at"] = now
+        self.store.update(save)
+        return f"Updated progress for {len(tracked)} requested titles."
 
     def refresh_metadata(self, identity, progress):
         state = self.store.read()
@@ -666,7 +731,10 @@ class Service:
                 key = (providers.clean(item["title"]), item["year"], row["media_type"])
                 if key not in cache:
                     progress("Checking catalog metadata for " + item["title"] + "...")
-                    cache[key] = providers.title_metadata(state["settings"], {**item, "media_type": row["media_type"]})
+                    try:
+                        cache[key] = providers.title_metadata(state["settings"], {**item, "media_type": row["media_type"]}, strict=True)
+                    except DomainError:
+                        cache[key] = "unavailable"
         ids = {row["id"] for row in rows}
         def save(current):
             for row in current["collections"]:
@@ -677,15 +745,20 @@ class Service:
                     key = (providers.clean(item["title"]), item["year"], row["media_type"])
                     if key in cache:
                         metadata = cache[key]
-                        item.update(metadata=metadata, metadata_status="verified" if metadata else "needs_check",
-                                    metadata_checked_at=time.time())
+                        if metadata == "unavailable":
+                            item["metadata_error"] = "Catalog unavailable; retry later."
+                            if not item.get("metadata"):
+                                item["metadata_status"] = "unavailable"
+                        else:
+                            item.update(metadata=metadata, metadata_status="verified" if metadata else "needs_check",
+                                        metadata_checked_at=time.time(), metadata_error="")
         self.store.update(save)
         if state["settings"].get("llm_url") and state["settings"].get("llm_model"):
             try:
                 self.describe({"ids": list(ids)}, progress)
             except DomainError:
                 return "Catalog metadata saved. Fit notes could not refresh; existing picks are preserved. Retry Check metadata to refresh their notes."
-        return f"Checked {len(cache)} titles; {sum(bool(value) for value in cache.values())} exact catalog matches. Unresolved picks are kept for review."
+        return f"Checked {len(cache)} titles; {sum(isinstance(value, dict) for value in cache.values())} exact catalog matches. Unresolved picks are kept for review."
 
     def improve(self, identity, progress, payload=None):
         from .discovery import propose_improvement
@@ -841,9 +914,13 @@ class Service:
             last_drift = 0  # Refill after promotion or a slot-count increase.
         generation_due = now - state["drift"].get("last_generated_at", 0) >= settings.get("drift_generation_hours", 168) * 3600
         drift_hours = settings["drift_interval_hours"] if automatic else settings.get("drift_generation_hours", 168)
-        if generation_due:
+        season_changed = context_key(active_events(settings, now)) != state["drift"].get("seasonal_context", "")
+        if generation_due or season_changed:
             last_drift = 0
+        pending_requests = any(item.get("requested_at") for c in state["collections"] if c["status"] != "archived"
+                               for field in ("missing", "available") for item in c.get(field, []))
         due = [
+            ("request status", pending_requests, state.get("requests_checked_at", 0), 1/60, self.refresh_requests),
             ("rotation", settings["advanced"]["schedule_enabled"] and settings["advanced"]["home_enabled"],
              state["last_rotation_at"], settings["rotation_hours"], self.rotate),
             ("Drift", settings["advanced"].get("drift_schedule_enabled") and settings.get("llm_model")
@@ -853,11 +930,11 @@ class Service:
              state["synced_at"], settings.get("library_sync_minutes", 10) / 60, self.sync),
         ]
         for kind, enabled, last_success, hours, operation in due:
-            retry_delay = 60 if kind == "library sync" else 900
+            retry_delay = 60 if kind in {"library sync", "request status"} else 900
             if not enabled or now - last_success < hours * 3600 or now - attempts.get(kind, 0) < retry_delay:
                 continue
             def scheduled(progress, run=operation):
-                if run != self.sync and time.time() - self.store.read()["synced_at"] > 6 * 3600:
+                if run not in {self.sync, self.refresh_requests} and time.time() - self.store.read()["synced_at"] > 6 * 3600:
                     self.sync(progress)
                 return run(progress)
             self.submit("Scheduled " + kind, scheduled)
@@ -866,6 +943,8 @@ class Service:
 
     def refresh_drift(self, progress):
         state = self.store.read()
+        if context_key(active_events(state["settings"])) != state["drift"].get("seasonal_context", ""):
+            return self.generate(progress)
         # Recover a partial publish without paying for another generation.
         if state["settings"]["advanced"]["auto_publish"]:
             current = state["drift"].get("current_batch_ids", [])

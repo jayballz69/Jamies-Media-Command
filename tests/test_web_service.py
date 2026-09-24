@@ -395,6 +395,38 @@ class ServiceWorkflowTests(TestCase):
         self.assertEqual(rows[-1]["source_revision"], membership_revision(source))
         self.assertEqual(rows[-1]["changes"]["added"], [r["title"] for r in self.rows[1:3]])
 
+    def test_request_batch_preserves_success_when_another_title_fails(self):
+        rows=[{"title":"Missing A","year":2020,"media_type":"movie"},{"title":"Missing B","year":2021,"media_type":"movie"}]
+        self.add([{"id":"req","name":"Requests","media_type":"movie","status":"published","items":[],"missing":rows}])
+        with patch("collection_web.integrations.request_title",side_effect=[DomainError("Catalog unavailable"),"Requested in Radarr"]):
+            with self.assertRaisesRegex(DomainError,"Processed 1 requests"):
+                self.service.request_missing("req",{"all":True},lambda _:None)
+        items=self.store.read()["collections"][0]["missing"]
+        self.assertEqual(items[0]["request_progress"],"Request failed")
+        self.assertTrue(items[1]["requested_at"])
+
+    def test_metadata_outage_retains_previous_verified_evidence(self):
+        metadata={"id":"external:4","title":"Missing","year":2020,"media_type":"movie"}
+        self.add([{"id":"meta","name":"Metadata","media_type":"movie","status":"published","items":[],"missing":[{"title":"Missing","year":2020,"metadata":metadata,"metadata_status":"verified"}]}])
+        with patch("collection_web.integrations.title_metadata",side_effect=DomainError("Unavailable")):
+            self.service.refresh_metadata("meta",lambda _:None)
+        item=self.store.read()["collections"][0]["missing"][0]
+        self.assertEqual(item["metadata"],metadata)
+        self.assertEqual(item["metadata_status"],"verified")
+        self.assertIn("unavailable",item["metadata_error"])
+
+    def test_seasonal_home_priority_ends_outside_event(self):
+        rows=self.drafts()
+        for row in rows:row.update(permanent=False,managed=True,home=False)
+        rows[-1]["seasonal_events"]=[{"id":"halloween:2026-10-17","reason":"Reviewed Halloween stories."}]
+        self.add(rows)
+        self.store.update(lambda state: state["drift"].update(pool_ids=[r["id"] for r in rows]))
+        state=self.store.read()
+        with patch("collection_web.service.active_events",return_value=[{"id":"halloween:2026-10-17","weight":3}]):
+            self.assertEqual(self.service._choose_pool(state)[0],rows[-1]["id"])
+        with patch("collection_web.service.active_events",return_value=[]):
+            self.assertEqual(self.service._choose_pool(state)[0],rows[0]["id"])
+
 
 if __name__ == "__main__":
     main()

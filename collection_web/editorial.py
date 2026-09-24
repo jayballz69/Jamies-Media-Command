@@ -6,6 +6,7 @@ import math
 
 from . import curation as c
 from .store import DomainError
+from .seasonal import DIRECTION
 
 CREATIVE = """You curate a home cinema, not a taxonomy. Discover compelling shelves people
 will enjoy browsing, using this real movie/TV inventory. Give each idea a natural,
@@ -75,6 +76,7 @@ SCHEMA = {"reason":"Overall editorial assessment", "collections":[{
     "name":"earned final title", "description":"short invitation", "thesis":"clear actual connection",
     "name_reason":"why this name fits", "size_reason":"why this selection works", "decision_reason":"verdict",
     "coherence":8,"quality":8,"originality":8,
+    "seasonal_events":[{"id":"one supplied seasonal event ID, or omit if not applicable","reason":"why all retained items make an appropriate shelf for this event/audience"}],
     "item_reviews":[{"id":"exact retained owned ID","fit":8,"reason":"specific factual fit"}]}]}
 
 
@@ -104,10 +106,10 @@ def generate(library, existing, history, settings, llm, progress=None):
             mix={"movie":min(media_remaining["movie"],count)}
             mix["show"]=min(media_remaining["show"],count-mix["movie"])
             report(f"Creating weekly ideas: group {group+1}/{math.ceil(wanted/6)}")
-            answer=c._call(llm,CREATIVE,c.CONCEPT_SCHEMA,{"stage":"creative_pool",
+            answer=c._call(llm,CREATIVE + ("\n" + DIRECTION if settings.get("seasonal_events") else ""),c.CONCEPT_SCHEMA,{"stage":"creative_pool",
                 "library":c._library_context(valid,settings.get("watch_inspiration",False)),
                 "memory":memory,"as_of_date":datetime.now(timezone.utc).date().isoformat(),
-                "requested_concepts":count,"requested_media_counts":mix,
+                "requested_concepts":count,"requested_media_counts":mix,"seasonal_events":settings.get("seasonal_events", []),
                 "already_proposed":[i.get("concept") for i in ideas]})
             diagnostics["model_calls"]+=1
             for idea in answer.get("concepts",[])[:count]:
@@ -142,9 +144,9 @@ def generate(library, existing, history, settings, llm, progress=None):
             "item_count":len(row.get("items", [])),
             "items":[c._facts(i, False) for i in row.get("items", [])[:40]],
             "items_truncated":len(row.get("items", []))>40} for _,row in references[:20]]
-        answer=c._call(llm,EDITOR,SCHEMA,{"stage":"pool_editor","candidates":[
+        answer=c._call(llm,EDITOR + ("\n" + DIRECTION + "\nAssign seasonal_events only to genuinely fitting shelves, with an evidence-based reason. School holiday endorsements must suit ages 10-16 based on actual stories and age ratings. Otherwise leave seasonal_events empty." if settings.get("seasonal_events") else ""),SCHEMA,{"stage":"pool_editor","candidates":[
             {**r,"items":[c._facts(i) for i in r['items']]} for r in candidates],"memory":memory,
-            "existing_collections":comparisons})
+            "existing_collections":comparisons,"seasonal_events":settings.get("seasonal_events", [])})
         diagnostics["model_calls"]+=1
     except DomainError as exc:
         diagnostics["reason"]=str(exc)
@@ -190,6 +192,10 @@ def generate(library, existing, history, settings, llm, progress=None):
         errors=c.validate_candidate(row,valid)
         if errors:
             diagnostics['rejected'].append({'concept':row['concept'],'reason':'; '.join(errors)});continue
+        allowed_events = {event["id"] for event in settings.get("seasonal_events", [])}
+        tags = decision.get("seasonal_events", [])
+        row["seasonal_events"] = [{"id":tag["id"],"reason":c._text(tag.get("reason"),700)}
+            for tag in tags if isinstance(tag,dict) and tag.get("id") in allowed_events and c._text(tag.get("reason"))] if isinstance(tags,list) else []
         names.add(c._norm(row['name']));result['collections'].append(row)
     kept=result['collections'];diagnostics.update(publishable=bool(kept),selected=len(kept),
         partial=len(kept)<target,previous_batch_retained=len(kept)<target,editor_reason=reason,

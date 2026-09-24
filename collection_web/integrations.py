@@ -62,6 +62,7 @@ def normalize_item(item, library_id):
             "collections": tags(item, "collections"),
             "play_count": int(getattr(item, "viewCount", 0) or 0),
             "rating": float(getattr(item, "audienceRating", 0) or getattr(item, "rating", 0) or 0),
+            "content_rating": str(getattr(item, "contentRating", "") or ""),
             "has_art": bool(getattr(item, "thumb", ""))}
 
 
@@ -246,7 +247,7 @@ def catalog_title_matches(row, item):
     return normalized(row.get("title", "")) == normalized(item.get("title", ""))
 
 
-def title_metadata(settings, item):
+def title_metadata(settings, item, *, strict=False):
     """Optional read-only Arr lookup; an exact external identity never means owned."""
     if (not isinstance(item, dict) or item.get("media_type") not in {"movie", "show"}
             or not isinstance(item.get("title"), str) or not item["title"].strip()
@@ -257,6 +258,8 @@ def title_metadata(settings, item):
     try:
         results = arr_request(settings, service, "GET", "/" + kind + "/lookup", params={"term": item["title"]})
     except (DomainError, ValueError, TypeError):
+        if strict:
+            raise DomainError("Catalog lookup is temporarily unavailable. Retry when Radarr/Sonarr can search again.") from None
         return None
     if not isinstance(results, list):
         return None

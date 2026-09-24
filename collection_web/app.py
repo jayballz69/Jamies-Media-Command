@@ -235,6 +235,14 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
         return jsonify(roots=[{"path": row["path"]} for row in roots],
                        profiles=[{"id": row["id"], "name": row["name"]} for row in profiles])
 
+    @app.post("/api/collections/review")
+    def review_permanent_collections():
+        return job("Review permanent collections", service.sweep_collections)
+
+    @app.post("/api/requests/refresh")
+    def refresh_requests():
+        return job("Refresh request progress", service.refresh_requests)
+
     @app.post("/api/library/sync")
     def sync():
         return job("Sync library", service.sync)

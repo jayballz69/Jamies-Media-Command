@@ -200,3 +200,36 @@ change for mobile use. Do not add router port forwards for this setup.
 The icon is also available at `/static/icon.png` and `/favicon.ico`, without login.
 See the [developer's favicon announcement](https://www.reddit.com/r/nzb360/comments/qkv3iz/)
 and [remote-access guide](https://github.com/Kev1000000/nzb360Guides/blob/main/remoteaccessguide.html).
+
+## Seasonal Drift, requests and collection review
+
+**Drift > Seasonal awareness** switches seasonal curation on or off immediately.
+Individual occasions live under **Settings > Seasonal awareness**. The feature is
+opt-in on a fresh installation and uses Australia/Brisbane dates:
+
+- Halloween: 17-31 October; Christmas: 11-25 December.
+- Easter: seven days before Easter Sunday through Easter Monday.
+- St Patrick's Day: 14-17 March.
+- Queensland school holidays: published state-school dates, with more viewing
+  aimed at ages 10-16. Coverage runs through the October 2029 break; later dates
+  are not guessed. Private-school dates can differ.
+- Optional New Year, Valentine's Day and May the Fourth windows.
+
+Active occasions guide generation and independent editorial review. Only shelves
+with a reviewed seasonal connection get Home priority; those shelves remain in the
+pool across weekly refreshes while the occasion lasts. Normal movie/TV slot counts
+still apply. An occasion change can trigger a new pool when Drift scheduling is on;
+otherwise use Generate weekly pool. Auto-publish remains a separate control.
+This is curation guidance, not a parental-control or age-classification guarantee.
+
+Requested suggestions show available Radarr/Sonarr queue progress, refreshed about
+once a minute while the app is running. Plex arrivals follow the library-sync
+interval. A series can appear in Plex before all episodes are downloaded. Queue
+warnings are marked for attention in Arr. Catalog outages are distinguished from
+ambiguous titles, and a failed bulk request preserves successful additions.
+
+**Collections > Review permanent collections** makes one bounded AI review of the
+whole permanent set. It saves a report of collection flavour, useful overlap and
+owned additions. No titles are moved, removed, or requested. Individual Improve
+also considers neighbouring collections. Large sets that exceed the review context
+limit fail with a clear message instead of silently reviewing only a subset.

@@ -24,6 +24,9 @@ DEFAULT_SETTINGS = {
                  "auto_publish": False, "home_enabled": True, "shared_home": False,
                  "missing_suggestions": True, "diversity": True, "sync_enabled": True},
 }
+from .seasonal import DEFAULT_TOGGLES
+DEFAULT_SETTINGS["advanced"].update(DEFAULT_TOGGLES)
+
 SECRETS = {"plex_token", "tautulli_key", "radarr_key", "sonarr_key", "llm_key", "trakt_client_id"}
 
 
@@ -117,5 +120,7 @@ def public_state(state):
                          "shows": sum(x["media_type"] == "show" for x in state["library"]),
                          "synced_at": state["synced_at"]}
     result["setup_required"] = not bool(state["settings"].get("plex_token"))
+    from .seasonal import status
+    result["seasonal"] = status(state["settings"])
     result["demo"] = False
     return result

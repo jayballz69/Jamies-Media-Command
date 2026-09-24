@@ -338,7 +338,8 @@ def _key(row):
 def _facts(row, summary=True):
     result = {"id": str(row["id"]), "title": _text(row.get("title"), 240),
               "year": row.get("year"), "media_type": row.get("media_type"),
-              "library_id": _text(str(row.get("library_id", "")), 80)}
+              "library_id": _text(str(row.get("library_id", "")), 80),
+              "content_rating": _text(row.get("content_rating"), 40)}
     if summary:
         result.update({"summary": _text(row.get("summary"), 550),
                        "genres": _tags(row.get("genres"))[:8],
