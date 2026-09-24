@@ -199,3 +199,15 @@ def test_luna_calls_are_bounded_and_report_provider_usage():
     assert call.call_args.kwargs['json']['max_completion_tokens']==16000
     assert call.call_args.kwargs['json']['reasoning_effort']=='low'
     assert usage==[{"prompt_tokens":123,"completion_tokens":45}]
+
+
+def test_catalog_year_suffix_resolves_jericho_without_confusing_editions():
+    item = {"title": "Jericho", "year": 2006, "media_type": "show"}
+    rows = [{"title": "Jericho", "year": 1966, "tvdbId": 1},
+            {"title": "Jericho (2006)", "year": 2006, "tvdbId": 79330, "overview": "A town after nuclear attacks."}]
+    with patch.object(integrations, "arr_request", return_value=rows):
+        result = integrations.title_metadata({}, item)
+    assert result["id"] == "external:79330"
+    assert result["title"] == "Jericho"
+    assert result["catalog_title"] == "Jericho (2006)"
+    assert not integrations.catalog_title_matches({"title": "3", "year": 2016}, {"title": "3%", "year": 2016})

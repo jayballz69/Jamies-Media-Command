@@ -98,6 +98,10 @@ class MockBackend:
             "/static/app.js": ("app.js", "text/javascript"),
             "/static/app.css": ("app.css", "text/css"),
         }
+        if path in {"/static/icon.png", "/favicon.ico"}:
+            route.fulfill(status=200, body=(STATIC_DIRECTORY / ("icon.png" if path.endswith("png") else "favicon.ico")).read_bytes(), content_type="image/png" if path.endswith("png") else "image/vnd.microsoft.icon")
+            return
+
         if path in assets and request.method == "GET":
             filename, content_type = assets[path]
             route.fulfill(
@@ -547,13 +551,15 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     advance_poll(page, 16000)
     page.locator('[data-filter="all"]').click()
     page.locator('[data-action="open"][data-id="source"]').click()
-    available = page.locator('[data-collection-suggestions] [data-action="add-available"]')
+    available = page.locator('[data-collection-suggestions] [data-action="add-available"][data-id="source"]')
+    expect(page.locator("[data-collection-suggestions]")).to_have_count(1)
+    expect(page.get_by_role("heading", name="Could complete the picture", exact=True)).to_have_count(1)
     expect(available).to_have_count(1)
     expect(available).to_have_attribute("data-item-id", "available-owned")
     expect(page.locator("[data-collection-suggestions]")).to_contain_text("Its isolated expedition matches this collection's premise.")
-    expect(page.locator('[data-collection-suggestions] [data-action="request"]')).to_have_count(1)
+    expect(page.locator('[data-collection-suggestions] [data-action="request"][data-id="source"]')).to_have_count(1)
     available.click()
-    expect(page.locator('[data-collection-suggestions] [data-action="add-available"]')).to_have_count(0)
+    expect(page.locator('[data-collection-suggestions] [data-action="add-available"][data-id="source"]')).to_have_count(0)
     if backend.latest_payload("/api/collections/source/add") != {"item_id": "available-owned"}:
         raise AssertionError("An already owned suggestion used the wrong add payload.")
     expect(page.locator("[data-collection-suggestions]")).to_contain_text("Drift additions also pass a fresh fit review.")

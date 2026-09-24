@@ -65,7 +65,7 @@ function updateCollectionEditControls() {
   const c = getCollection(detailId);
   if (!c) return;
   const dirty = hasCollectionEdits(c.id);
-  for (const action of ['publish', 'apply-improvement', 'improve', 'request', 'request-all', 'add-available', 'describe']) {
+  for (const action of ['publish', 'apply-improvement', 'improve', 'request', 'request-all', 'add-available', 'describe', 'metadata']) {
     detailDialog.querySelectorAll(`[data-action="${action}"]`).forEach(el => {
       el.disabled = dirty || (['publish', 'apply-improvement'].includes(action) && !list(c.items).length);
     });
@@ -169,7 +169,7 @@ function nextCycle(last, hours, enabled) {
 function getCollection(id) { return list(state?.collections).find(c => String(c.id) === String(id)); }
 function running(kind) { return list(state?.jobs).some(j => j.status === 'running' && (!kind || String(j.kind).toLowerCase().includes(kind === 'rotation' ? 'rotat' : kind))); }
 function requested(item) { return !!(item.requested || item.requested_at || /^(requested|already in)/i.test(item.request_status || '')); }
-function requestable(item) { return !requested(item) && item.reason !== 'Ambiguous library match'; }
+function requestable(item) { return !requested(item) && item.reason !== 'Ambiguous library match' && item.metadata_status !== 'needs_check' && !['weak', 'uncertain'].includes(item.fit_status); }
 function pill(c) {
   if (c.status === 'published') return `<span class="pill live"><i class="status-dot"></i>${c.managed === false ? 'From Plex' : 'Live in Plex'}</span>`;
   if (c.status === 'kept') return '<span class="pill kept">Saved draft</span>';
@@ -425,7 +425,7 @@ function renderLogin(error = '') {
 function mediaItem(item, missing = false, index = 0, collection = null) {
   const alreadyRequested = requested(item);
   const fitReason = item.fit_reason || item.reason || list(collection?.review?.item_reviews).find(review => String(review.id) === String(item.id))?.reason;
-  return `<div class="media-item"><div class="item-thumb">${item.has_art ? `<img src="/api/artwork/${encodeURIComponent(item.id)}" alt="" loading="lazy">` : icon(typeIcon(item.media_type || collection?.media_type))}</div><div class="item-info"><strong>${esc(item.title || item.name || 'Untitled')}</strong><p>${esc(item.year || typeName(item.media_type || collection?.media_type))}</p>${fitReason ? `<p class="fit-reason">${esc(fitReason)}</p>` : ''}${list(item.possible_matches).length ? `<p class="detail-note">Check library match: ${esc(item.possible_matches.map(row => `${row.title} (${row.year || 'year unknown'}) ? ${typeName(row.media_type)}`).join('; '))}. Correct the title or year before requesting.</p>` : ''}</div><div class="item-side">${missing ? alreadyRequested ? `<span class="pill kept">${/^already in/i.test(item.request_status || '') ? 'Already added' : 'Requested'}</span>` : requestable(item) ? button(`Request in ${typeIcon(collection?.media_type) === 'tv' ? 'Sonarr' : 'Radarr'}`, 'request', {id: collection.id, kind: 'secondary', small: true, extra: `data-index="${index}"`}) : '<span class="pill">Match unclear</span>' : 'In library'}</div></div>`;
+  return `<div class="media-item"><div class="item-thumb">${item.has_art ? `<img src="/api/artwork/${encodeURIComponent(item.id)}" alt="" loading="lazy">` : icon(typeIcon(item.media_type || collection?.media_type))}</div><div class="item-info"><strong>${esc(item.title || item.name || 'Untitled')}</strong><p>${esc(item.year || typeName(item.media_type || collection?.media_type))}</p>${fitReason ? `<p class="fit-reason">${esc(fitReason)}</p>` : ''}${missing && item.metadata_status === 'needs_check' ? '<p class="detail-note">No unique catalog match yet. Check the title/year or retry metadata lookup.</p>' : ''}${missing && item.metadata?.summary ? `<details class="detail-note"><summary>About this title</summary><p>${esc(item.metadata.summary)}</p></details>` : ''}${list(item.possible_matches).length ? `<p class="detail-note">Check library match: ${esc(item.possible_matches.map(row => `${row.title} (${row.year || 'year unknown'}) ? ${typeName(row.media_type)}`).join('; '))}. Correct the title or year before requesting.</p>` : ''}</div><div class="item-side">${missing ? alreadyRequested ? `<span class="pill kept">${/^already in/i.test(item.request_status || '') ? 'Already added' : 'Requested'}</span>` : requestable(item) ? button(`Request in ${typeIcon(collection?.media_type) === 'tv' ? 'Sonarr' : 'Radarr'}`, 'request', {id: collection.id, kind: 'secondary', small: true, extra: `data-index="${index}"`}) : `<span class="pill">${item.fit_status === 'weak' ? 'Review fit' : 'Needs checking'}</span>` : 'In library'}</div></div>`;
 }
 function arrivalNote(c) {
   const service = typeIcon(c.media_type) === 'tv' ? 'Sonarr' : 'Radarr';
@@ -436,21 +436,31 @@ function availableItem(item, c) {
 }
 function inlineImprovements(c) {
   const pending = activeCollections().filter(row => String(row.source_collection_id) === String(c.id) && row.origin === 'improve' && ['draft', 'kept'].includes(row.status)).sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
-  const jobId = improvementJobs.get(String(c.id));
-  const job = list(state.jobs).find(row => row.id === jobId);
-  const progress = job?.status === 'running' ? `<div class="job" role="status"><span class="spinner" aria-hidden="true"></span><strong>Finding improvements</strong><p>${esc(job.message || 'Looking for strong fits…')}</p></div>` : job?.status === 'failed' ? `<p class="detail-note" role="status">${esc(job.message || 'The improvement could not be completed. Try again when ready.')}</p>` : '';
+  const job = list(state.jobs).find(row => row.id === improvementJobs.get(String(c.id)));
+  const progress = job?.status === 'running' ? `<div class="job" role="status"><span class="spinner" aria-hidden="true"></span><strong>Finding improvements</strong><p>${esc(job.message || 'Looking for strong fits...')}</p></div>` : job?.status === 'failed' ? `<p class="detail-note" role="status">${esc(job.message)}</p>` : '';
+  const key = item => `${String(item.title || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()}|${item.year}`;
+  const seen = new Set(list(c.items).map(key));
+  const owned = [], missing = [];
+  // Prefer newest notes, but retain older choices and each row's action target.
+  for (const owner of [...pending, c]) {
+    const candidates = [...(owner === c ? [] : list(owner.items)), ...list(owner.available)];
+    for (const item of candidates) {
+      if (seen.has(key(item))) continue;
+      seen.add(key(item)); owned.push({item, owner, available: list(owner.available).some(row => row.id === item.id)});
+    }
+  }
+  for (const owner of [...pending, c]) {
+    list(owner.missing).forEach((item, index) => {
+      if (seen.has(key(item))) return;
+      seen.add(key(item)); missing.push({item, owner, index});
+    });
+  }
   const draft = pending[0];
-  if (!draft) return progress;
-  const existing = new Set(list(c.items).map(row => String(row.id)));
-  const additions = [...list(draft.items), ...list(draft.available)].filter(row => {
-    const identity = String(row.id);
-    if (existing.has(identity)) return false;
-    existing.add(identity);
-    return true;
-  });
-  const missing = list(draft.missing);
-  return `${progress}<section class="section" data-improvement-preview="${esc(draft.id)}"><div class="section-heading"><div><h3>Could complete the picture</h3><p>${num(additions.length)} new library matches · ${num(missing.length)} missing suggestions</p></div>${button('Review improvements', 'open', {id: draft.id, kind: 'secondary', small: true})}</div><p class="detail-note">${esc(draft.thesis || draft.description || 'A new proposal for this collection.')} Your original collection stays unchanged until you apply the draft.</p>${additions.length ? `<h3>Already in your library</h3><div class="item-list">${additions.map(item => mediaItem(item, false, 0, draft)).join('')}</div>` : ''}${missing.length ? `<h3 style="margin-top:20px">Worth adding</h3>${arrivalNote(draft)}<div class="item-list">${missing.map((item, index) => mediaItem(item, true, index, draft)).join('')}</div>` : ''}${!additions.length && !missing.length ? '<p class="detail-note">This proposal refines the existing selection. Review its full changes before applying.</p>' : ''}</section>`;
+  if (!owned.length && !missing.length && !draft) return progress;
+  const bulk = draft || c;
+  return `${progress}<section class="section" data-collection-suggestions ${draft ? `data-improvement-preview="${esc(draft.id)}"` : ''}><div class="section-heading"><div><h3>Could complete the picture</h3><p>${num(owned.length)} already in your library &middot; ${num(missing.length)} not in your library</p></div><div class="actions">${draft ? button('Review improvements', 'open', {id:draft.id, kind:'secondary', small:true}) : ''}${missing.length ? button('Check metadata', 'metadata', {id:c.id, kind:'secondary', small:true}) : ''}${missing.length && missing.every(row => row.owner.id === bulk.id) && missing.some(row => requestable(row.item)) ? button('Request all missing', 'request-all', {id:bulk.id, kind:'secondary', small:true}) : ''}</div></div>${draft ? '<p class="detail-note">Suggestions from your improvements are gathered here. Your live collection stays unchanged until you apply a reviewed draft.</p>' : ''}<h3>Already in your library</h3>${owned.length ? `<div class="item-list">${owned.map(row => row.available ? availableItem(row.item, row.owner) : mediaItem(row.item, false, 0, row.owner)).join('')}</div>` : '<p class="detail-note">No new library matches yet.</p>'}<h3 style="margin-top:20px">Not in your library</h3>${missing.length ? `${arrivalNote(bulk)}<div class="item-list">${missing.map(row => mediaItem(row.item, true, row.index, row.owner)).join('')}</div>` : '<p class="detail-note">No external suggestions yet.</p>'}</section>`;
 }
+
 function collectionOptions(c) {
   if (c.status === 'archived') return '<p class="detail-note">This collection is archived. Its history stays available here.</p>';
   if (c.status === 'published' || c.origin === 'drift') {
@@ -475,13 +485,13 @@ function renderDetail() {
   const needsReview = c.origin === 'opportunity' && !c.manual_reviewed;
   detailDialog.innerHTML = `<div class="dialog-top">${cover(c)}<button class="icon-button dialog-close" data-action="close-detail" aria-label="Close collection">${icon('close')}</button><div class="dialog-heading">${pill(c)}<h2 id="dialog-title">${esc(c.name)}</h2><p>${esc(c.description || c.thesis || `${num(list(c.items).length)} titles, brought together in one collection.`)}</p><div class="actions">${c.status !== 'published' && c.status !== 'archived' ? needsReview ? button('Review before publishing', 'review-opportunity', {id: c.id, glyph: 'check'}) : button(c.origin === 'improve' ? 'Publish as a new collection' : 'Publish to Plex', 'publish', {id: c.id, glyph: 'upload', disabled: dirty || !list(c.items).length}) : ''}${!c.permanent && c.origin === 'drift' ? button('Keep in permanent rotation', 'keep', {id: c.id, kind: 'secondary', glyph: 'bookmark'}) : ''}${c.status !== 'archived' ? button('Improve collection', 'improve', {id: c.id, kind: 'secondary', glyph: 'drift', disabled: dirty}) : ''}</div><p id="detail-save-note" class="detail-note" ${dirty ? '' : 'hidden'}>You have unsaved edits. Save them in Edit collection before publishing or applying.</p>${needsReview ? '<p class="detail-note">This idea needs your review. Check its name and titles, then save it before publishing.</p>' : ''}</div></div>
       <div class="dialog-body"><div class="dialog-tabs" role="tablist" aria-label="Collection details">${[['titles', `Titles · ${list(c.items).length}`], ['story', 'The connection'], ['edit', c.status === 'published' || c.origin === 'drift' ? 'Options' : 'Edit collection']].map(([key, label]) => `<button class="dialog-tab" id="tab-${key}" role="tab" aria-selected="${detailTab === key}" aria-controls="detail-panel" data-tab="${key}" tabindex="${detailTab === key ? '0' : '-1'}">${label}</button>`).join('')}</div><section id="detail-panel" role="tabpanel" aria-labelledby="tab-${detailTab}" tabindex="0">
-      ${detailTab === 'titles' ? `${list(c.items).length ? `<div class="item-list">${list(c.items).map(item => mediaItem(item, false, 0, c)).join('')}</div>` : '<p class="detail-note">No matching titles are in your synced library yet.</p>'}${missing.length || available.length ? `<section class="section" data-collection-suggestions><div class="section-heading"><div><h3>Could complete the picture</h3><p>${num(available.length)} already in your library · ${num(missing.length)} missing</p></div>${missing.some(requestable) ? button('Request all missing', 'request-all', {id: c.id, kind: 'secondary', small: true}) : ''}</div>${available.length ? `<h3>Ready in your library</h3><div class="item-list">${available.map(item => availableItem(item, c)).join('')}</div>` : ''}${missing.length ? `${arrivalNote(c)}<div class="item-list">${missing.map((item, i) => mediaItem(item, true, i, c)).join('')}</div>` : ''}</section>` : ''}${inlineImprovements(c)}` : ''}
+      ${detailTab === 'titles' ? `${list(c.items).length ? `<div class="item-list">${list(c.items).map(item => mediaItem(item, false, 0, c)).join('')}</div>` : '<p class="detail-note">No matching titles are in your synced library yet.</p>'}${inlineImprovements(c)}` : ''}
       ${detailTab === 'story' ? `<div class="thesis"><span class="eyebrow">THE THREAD THAT HOLDS IT TOGETHER</span><p>${esc(c.thesis || c.description || 'This collection was brought together by its curator. Add a description to share the idea behind it.')}</p></div>${c.name_reason ? `<h3>Why this name</h3><p class="detail-note">${esc(c.name_reason)}</p>` : ''}<h3>Collection notes</h3><p class="detail-note">Created ${esc(date(c.created_at))}${c.published_at ? `. Published ${esc(date(c.published_at))}` : '. This collection has not been published to Plex.'}${c.permanent ? ' Kept as a permanent collection.' : ''}</p>${c.source_collection_id ? '<p class="detail-note">This is a new proposal based on an existing collection. The original collection is preserved.</p>' : ''}` : ''}
       ${detailTab === 'story' && c.origin !== 'drift' && c.status !== 'archived' ? `<p class="detail-note">Refresh the explanation of how these titles fit together.</p>${button('Refresh connection', 'describe', {id: c.id, kind: 'secondary', glyph: 'drift', disabled: dirty})}` : ''}
       ${detailTab === 'story' && c.changes ? `<h3>Changes from the original</h3><p class="detail-note"><strong>Add:</strong> ${esc(list(c.changes.added).join(', ') || 'No additions')}<br><strong>Remove from collection:</strong> ${esc(list(c.changes.removed).join(', ') || 'No removals')}</p>` : ''}
       ${detailTab === 'edit' ? collectionOptions(c) : ''}
       ${c.origin === 'improve' && ['draft', 'kept'].includes(c.status) ? improvementAction(c) : ''}
-      </section><footer class="dialog-bottom"><p>${c.status === 'published' ? 'Published to your Plex library.' : c.status === 'archived' ? 'Archived in Collection Manager.' : 'A local draft. Nothing has been published yet.'}</p>${c.status !== 'archived' ? button(c.status === 'published' ? 'Retire from rotation' : 'Dismiss proposal', 'archive', {id: c.id, kind: 'ghost', small: true, glyph: 'archive'}) : ''}</footer></div>`;
+      </section><footer class="dialog-bottom"><p>${c.status === 'published' ? 'Current collection is live in Plex; proposed additions are separate until applied.' : c.status === 'archived' ? 'Archived in Collection Manager.' : 'A local draft. Nothing has been published yet.'}</p>${c.status !== 'archived' ? button(c.status === 'published' ? 'Retire from rotation' : 'Dismiss proposal', 'archive', {id: c.id, kind: 'ghost', small: true, glyph: 'archive'}) : ''}</footer></div>`;
   updateCollectionEditControls();
 }
 function openDetail(id) {
@@ -586,7 +596,7 @@ document.addEventListener('click', async event => {
   event.preventDefault();
   const action = el.dataset.action;
   const id = el.dataset.id;
-  if (['publish', 'apply-improvement', 'improve', 'request', 'request-all', 'add-available', 'describe'].includes(action) && hasCollectionEdits(id)) {
+  if (['publish', 'apply-improvement', 'improve', 'request', 'request-all', 'add-available', 'describe', 'metadata'].includes(action) && hasCollectionEdits(id)) {
     toast('Save your collection edits before continuing.', true);
     detailTab = 'edit'; renderDetail();
     return;
@@ -608,6 +618,7 @@ document.addEventListener('click', async event => {
   if (action === 'legacy-import') return runAction(el, '/api/import', {}, 'Reading your previous collections.');
   if (action === 'publish') return runAction(el, `/api/collections/${encodeURIComponent(id)}/publish`, {}, 'Publishing this collection to Plex.');
   if (action === 'add-available') return runAction(el, `/api/collections/${encodeURIComponent(id)}/add`, {item_id: el.dataset.itemId}, getCollection(id)?.origin === 'drift' ? 'Reviewing this addition before it joins your Drift collection.' : 'Adding the library title to this collection.');
+  if (action === 'metadata') return runAction(el, `/api/collections/${encodeURIComponent(id)}/metadata`, {}, 'Checking external titles against the catalog.');
   if (action === 'describe') return runAction(el, `/api/collections/${encodeURIComponent(id)}/describe`, {}, 'Refreshing the connection between these titles.');
   if (action === 'keep') return runAction(el, `/api/collections/${encodeURIComponent(id)}/keep`, {}, getCollection(id)?.status === 'published' ? 'Kept in your permanent rotation pool.' : 'Saved for your permanent pool. Publish the draft when it is ready.');
   if (action === 'adopt') return runAction(el, `/api/collections/${encodeURIComponent(id)}/adopt`, {}, 'Adding this collection to managed rotation. Its titles stay intact.');

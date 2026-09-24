@@ -22,7 +22,7 @@ inventory. Write one concise fit note for EVERY title marked requires_note=true,
 including available and missing suggestions. Do not return notes for titles with
 requires_note=false; those members supply context for the thesis. A title being
 missing is not evidence that it fits. Explain the specific connection, not its
-availability. Avoid generic praise and repeating the collection name as proof.
+availability. For each note also return fit="strong", "uncertain", or "weak": strong requires a clear factual story connection, uncertain means identity/evidence is insufficient, weak means a known thematic mismatch. Preserve questionable picks for human review rather than pretending they fit. Avoid generic praise and repeating the collection name as proof.
 Use the actual metadata sample as evidence. The complete title/year inventory
 is supplied separately; metadata covers only a sample. Existing descriptions,
 theses and fit notes are claims to assess, not verified facts. Do not invent plot
@@ -38,7 +38,7 @@ collection id, with exactly one note per required integer title index. If no
 titles require notes, return an empty notes list. Do not return any new
 collections or titles. Output JSON only:
 {"collections":[{"id":"exact supplied collection id","thesis":"connection",
-"notes":[{"index":0,"reason":"specific fit or honest evidence limitation"}]}]}.
+"notes":[{"index":0,"reason":"specific fit or honest evidence limitation","fit":"strong|uncertain|weak"}]}]}.
 """
 
 
@@ -121,7 +121,10 @@ def _validate(answer, batch):
             if (type(index) is not int or index not in supplied[identity] or index in checked
                     or not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500):
                 raise DomainError("The curator returned an invalid or duplicate title explanation. No explanations were saved.")
-            checked[index] = {**supplied[identity][index], "reason": reason.strip()}
+            fit = note.get("fit", "unassessed")
+            if fit not in {"strong", "uncertain", "weak", "unassessed"}:
+                raise DomainError("The curator returned an invalid fit assessment.")
+            checked[index] = {**supplied[identity][index], "reason": reason.strip(), "fit_status": fit}
         if len(checked) != len(supplied[identity]):
             raise DomainError("The curator did not explain every required title. No explanations were saved.")
         outputs[identity] = {"id": identity, "thesis": thesis.strip(),

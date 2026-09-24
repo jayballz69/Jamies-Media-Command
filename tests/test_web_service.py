@@ -364,6 +364,37 @@ class ServiceWorkflowTests(TestCase):
         self.assertEqual(after["available"], [])
         self.assertEqual(publish.call_args.kwargs["expected_source"]["items"], self.rows[:1])
 
+    def test_metadata_refresh_preserves_unresolved_picks_and_blocks_requests(self):
+        missing = [{"title": "Known", "year": 2020, "media_type": "movie", "reason": "Fits"},
+                   {"title": "Uncertain", "year": 2021, "media_type": "movie", "reason": "Maybe"}]
+        self.add([{"id": "source", "name": "Shelf", "media_type": "movie", "origin": "manual", "status": "published", "items": [], "missing": missing}])
+        metadata = {"id": "external:12", "title": "Known", "year": 2020, "media_type": "movie", "summary": "A factual plot", "external_source": "tmdb"}
+        with patch("collection_web.integrations.title_metadata", side_effect=[metadata, None]):
+            self.service.refresh_metadata("source", lambda _: None)
+        row = self.store.read()["collections"][0]
+        self.assertEqual(len(row["missing"]), 2)
+        self.assertEqual(row["missing"][0]["metadata"]["summary"], "A factual plot")
+        self.assertEqual(row["missing"][1]["metadata_status"], "needs_check")
+        reconcile_suggestions(row, self.rows)
+        self.assertEqual(row["missing"][0]["metadata_status"], "verified")
+        with patch("collection_web.integrations.request_title") as request:
+            self.service.request_missing("source", {"index": 1}, lambda _: None)
+        request.assert_not_called()
+
+    def test_improve_preserves_pending_additions_and_live_revision(self):
+        source = {"id": "source", "name": "Shelf", "media_type": "movie", "origin": "manual", "status": "published", "items": self.rows[:1], "missing": []}
+        previous = {**deepcopy(source), "id": "previous", "source_collection_id": "source", "origin": "improve", "status": "draft", "items": self.rows[:2]}
+        self.add([source, previous])
+        def proposal(state, combined, *args, **kwargs):
+            self.assertEqual([r["id"] for r in combined["items"]], [r["id"] for r in self.rows[:2]])
+            return {**deepcopy(previous), "id": "next", "items": self.rows[:3]}
+        with patch("collection_web.discovery.propose_improvement", side_effect=proposal):
+            self.service.improve("source", lambda _: None)
+        rows = self.store.read()["collections"]
+        self.assertEqual(rows[0], source)
+        self.assertEqual(rows[-1]["source_revision"], membership_revision(source))
+        self.assertEqual(rows[-1]["changes"]["added"], [r["title"] for r in self.rows[1:3]])
+
 
 if __name__ == "__main__":
     main()

@@ -95,7 +95,7 @@ def match_titles(titles, library, media_type):
         else:
             missing.append({"title": title, "year": year, "media_type": media_type,
                             "reason": "Ambiguous library match" if matches else row.get("reason", "Not in the synced library")})
-            for key in ("requested_at", "request_status", "fit_reason"):
+            for key in ("requested_at", "request_status", "fit_reason", "metadata", "metadata_status", "metadata_checked_at", "fit_status"):
                 if key in row:
                     missing[-1][key] = row[key]
     if owned and len({r["library_id"] for r in owned}) > 1:
@@ -638,7 +638,7 @@ class Service:
         done = 0
         for index in indices:
             item = candidate["missing"][index]
-            if item.get("requested_at") or item.get("reason") == "Ambiguous library match":
+            if item.get("requested_at") or item.get("reason") == "Ambiguous library match" or item.get("metadata_status") == "needs_check" or item.get("fit_status") in {"weak", "uncertain"}:
                 continue
             owned, _ = match_titles([item], state["library"], candidate["media_type"])
             if owned or possible_matches(item, state["library"]):
@@ -654,6 +654,39 @@ class Service:
         self.store.update(lambda current: reconcile_suggestions(collection_by_id(current, identity), current["library"]))
         return f"Processed {done} missing-title requests."
 
+    def refresh_metadata(self, identity, progress):
+        state = self.store.read()
+        source = collection_by_id(state, identity)
+        rows = [source] + [row for row in state["collections"]
+            if row.get("source_collection_id") == identity and row.get("status") in {"draft", "kept"}]
+        cache = {}
+        for row in rows:
+            reconcile_suggestions(row, state["library"])
+            for item in row.get("missing", []):
+                key = (providers.clean(item["title"]), item["year"], row["media_type"])
+                if key not in cache:
+                    progress("Checking catalog metadata for " + item["title"] + "...")
+                    cache[key] = providers.title_metadata(state["settings"], {**item, "media_type": row["media_type"]})
+        ids = {row["id"] for row in rows}
+        def save(current):
+            for row in current["collections"]:
+                if row["id"] not in ids:
+                    continue
+                reconcile_suggestions(row, current["library"])
+                for item in row.get("missing", []):
+                    key = (providers.clean(item["title"]), item["year"], row["media_type"])
+                    if key in cache:
+                        metadata = cache[key]
+                        item.update(metadata=metadata, metadata_status="verified" if metadata else "needs_check",
+                                    metadata_checked_at=time.time())
+        self.store.update(save)
+        if state["settings"].get("llm_url") and state["settings"].get("llm_model"):
+            try:
+                self.describe({"ids": list(ids)}, progress)
+            except DomainError:
+                return "Catalog metadata saved. Fit notes could not refresh; existing picks are preserved. Retry Check metadata to refresh their notes."
+        return f"Checked {len(cache)} titles; {sum(bool(value) for value in cache.values())} exact catalog matches. Unresolved picks are kept for review."
+
     def improve(self, identity, progress, payload=None):
         from .discovery import propose_improvement
         payload = payload or {}
@@ -661,11 +694,28 @@ class Service:
             raise DomainError("Choose whether to request missing suggestions.")
         state = self.store.read()
         source = collection_by_id(state, identity)
+        original = source
+        source = copy.deepcopy(source)
+        # Accumulate pending choices without changing the live shelf or its revision.
+        for previous in sorted(state["collections"], key=lambda row: row.get("created_at", 0)):
+            if previous.get("source_collection_id") == identity and previous.get("status") in {"draft", "kept"}:
+                for field in ("items", "missing", "available"):
+                    existing = {(providers.clean(row["title"]), row["year"]) for row in source.get(field, [])}
+                    for item in previous.get(field, []):
+                        key = (providers.clean(item["title"]), item["year"])
+                        if key not in existing:
+                            source.setdefault(field, []).append(copy.deepcopy(item))
+                            existing.add(key)
         progress("Finding additions across your library and reviewing their fit…")
         candidate = propose_improvement(state, source, payload, lambda prompt: providers.call_llm(state["settings"], prompt),
                                         metadata_lookup=lambda item: providers.title_metadata(state["settings"], item))
+        candidate["source_revision"] = membership_revision(original)
+        candidate["changes"] = {
+            "added": [row["title"] for row in candidate["items"] if row["id"] not in {i["id"] for i in original["items"]}],
+            "removed": [row["title"] for row in original["items"] if row["id"] not in {i["id"] for i in candidate["items"]}]}
         reconcile_suggestions(candidate, state["library"])
         self.store.update(lambda current: current["collections"].append(candidate))
+        self.refresh_metadata(candidate["id"], progress)
         if payload.get("auto_request") and payload.get("mode") == "expand":
             self.request_missing(candidate["id"], {"all": True}, progress)
         return "An improvement draft is ready: " + candidate["name"]
@@ -704,7 +754,7 @@ class Service:
                     if key in checked or item.get("reason") == "Ambiguous library match":
                         continue
                     checked.add(key)
-                    metadata = providers.title_metadata(state["settings"], {**item, "media_type": row["media_type"]})
+                    metadata = item.get("metadata") if item.get("metadata_status") == "verified" else providers.title_metadata(state["settings"], {**item, "media_type": row["media_type"]})
                     if metadata:
                         context_library.append(metadata)
             progress(f"Writing the connection and fit notes for collections {offset + 1}–{min(offset + 4, len(rows))} of {len(rows)}…")
@@ -715,12 +765,14 @@ class Service:
                     target = collection_by_id(current, result["id"])
                     reconcile_suggestions(target, current["library"])
                     target.update(thesis=result["thesis"], context_updated_at=time.time())
-                    notes = {(providers.clean(row["title"]), row["year"]): row["reason"] for row in result["notes"]}
+                    notes = {(providers.clean(row["title"]), row["year"]): row for row in result["notes"]}
                     for field in ("items", "missing", "available"):
                         for item in target.get(field, []):
                             key = (providers.clean(item["title"]), item["year"])
                             if key in notes:
-                                item["fit_reason" if item.get("reason") == "Ambiguous library match" else "reason"] = notes[key]
+                                item["fit_reason" if item.get("reason") == "Ambiguous library match" else "reason"] = notes[key]["reason"]
+                                if field == "missing":
+                                    item["fit_status"] = notes[key].get("fit_status", "unassessed")
             self.store.update(save)
             count += len(descriptions)
         return f"Added collection context and fit notes to {count} collections."

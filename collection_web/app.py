@@ -351,6 +351,8 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
         if action == "improve":
             payload = body()
             return job("Improve collection", lambda progress: service.improve(identity, progress, payload))
+        if action == "metadata":
+            return job("Check suggestion metadata", lambda progress: service.refresh_metadata(identity, progress))
         if action == "describe":
             return job("Explain collection", lambda progress: service.describe({"ids": [identity]}, progress))
         if action == "apply":

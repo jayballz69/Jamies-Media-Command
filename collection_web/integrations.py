@@ -236,6 +236,16 @@ def arr_request(settings, service, method, path, **kwargs):
                 headers={"X-Api-Key": settings[service + "_key"]}, **kwargs).json()
 
 
+def catalog_title_matches(row, item):
+    """Accept an exact year-qualified catalog title, never a different edition."""
+    if type(row.get("year")) is not int or row["year"] != item.get("year"):
+        return False
+    def normalized(title):
+        title = re.sub(r"\s*\(" + str(item["year"]) + r"\)\s*$", "", str(title))
+        return re.sub(r"[^\w%]+", " ", title.casefold()).strip()
+    return normalized(row.get("title", "")) == normalized(item.get("title", ""))
+
+
 def title_metadata(settings, item):
     """Optional read-only Arr lookup; an exact external identity never means owned."""
     if (not isinstance(item, dict) or item.get("media_type") not in {"movie", "show"}
@@ -251,8 +261,7 @@ def title_metadata(settings, item):
     if not isinstance(results, list):
         return None
     matches = [row for row in results if isinstance(row, dict)
-               and clean(row.get("title")) == clean(item["title"])
-               and type(row.get("year")) is int and row["year"] == item["year"]]
+               and catalog_title_matches(row, item)]
     if len(matches) != 1:
         return None
     match = matches[0]
@@ -261,7 +270,7 @@ def title_metadata(settings, item):
         return None
     genres = match.get("genres")
     return {"id": "external:" + str(external_id), "external_source": "tvdb" if media == "show" else "tmdb",
-            "title": match["title"], "year": match["year"], "media_type": media,
+            "title": item["title"], "catalog_title": match["title"], "year": match["year"], "media_type": media,
             "summary": str(match.get("overview") or "")[:4000],
             "genres": [tag[:120] for tag in genres if isinstance(tag, str)][:20] if isinstance(genres, list) else [],
             "studio": str(match.get("studio") or match.get("network") or "")[:240]}
@@ -277,8 +286,7 @@ def request_title(settings, item):
         raise DomainError(f"Choose a valid {service.title()} root folder and quality profile in Settings.")
     kind = "series" if service == "sonarr" else "movie"
     results = arr_request(settings, service, "GET", "/" + kind + "/lookup", params={"term": item["title"]})
-    matches = [r for r in results if clean(r.get("title")) == clean(item["title"])
-               and int(r.get("year") or 0) == int(item.get("year") or 0)]
+    matches = [r for r in results if isinstance(r, dict) and catalog_title_matches(r, item)]
     if len(matches) != 1:
         raise DomainError("Could not find one exact title/year match. Review the title in your Arr app.")
     match = matches[0]
