@@ -16,7 +16,7 @@ def title_key(item):
 
 
 def shelves(state):
-    return [c for c in state['collections'] if c['status'] == 'published'
+    return [c for c in state['collections'] if c['status'] == 'published' and not c.get('family_rolling')
             and (c.get('origin') != 'drift' or c.get('permanent'))]
 
 

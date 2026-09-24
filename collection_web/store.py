@@ -114,6 +114,8 @@ def public_state(state):
     result = {key: value for key, value in state.items()
               if key not in {"settings", "library", "server_id", "history"}}
     result["settings"] = public_settings(state["settings"])
+    if 'family_shelf' in result:
+        result['family_shelf'] = {k:v for k,v in result['family_shelf'].items() if k!='decisions'}
     if "new_arrivals" in result:
         result["new_arrivals"] = {key: value for key, value in result["new_arrivals"].items()
                                   if key not in {"seen", "pending"}}

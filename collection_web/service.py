@@ -321,6 +321,8 @@ class Service:
             self.store.update(lambda current, name=candidate["name"], count=len(arrived): event(current, f"Added {count} newly available requested titles to {name}."))
 
     def _add_items(self, candidate, additions, state, progress):
+        if candidate.get('family_rolling'):
+            raise DomainError('This shelf automatically keeps the newest 25 family movies. Use Refresh family shelf on Rotation.')
         replacement = copy.deepcopy(candidate)
         present = {row["id"] for row in replacement["items"]}
         replacement["items"].extend(copy.deepcopy(row) for row in additions if row["id"] not in present)
@@ -486,7 +488,7 @@ class Service:
         settings = state["settings"]
         chosen = []
         for kind, key in (("movie", "permanent_movie_slots"), ("show", "permanent_show_slots")):
-            pool = [c for c in state["collections"] if self.eligible(c) and not self.temporary(c)
+            pool = [c for c in state["collections"] if self.eligible(c) and not self.temporary(c) and not c.get('pinned_home')
                     and c.get("media_type", "movie") == kind]
             if preserve:
                 current = [c for c in pool if c.get("home")][:settings[key]]
@@ -580,6 +582,8 @@ class Service:
     def _apply_home(self, state, chosen, progress, *, rotate_permanent, replacement):
         from .curation import validate_candidate
         settings = state["settings"]
+        chosen = list(chosen) + [c for c in state['collections'] if c.get('pinned_home')
+            and c.get('managed') and c['status']=='published' and c['id'] not in {r['id'] for r in chosen}]
         for candidate in chosen:
             if candidate.get("origin") == "drift" and validate_candidate(candidate, state["library"]):
                 raise DomainError("A Drift shelf changed since review. Generate a fresh batch before changing Home.")
@@ -769,6 +773,8 @@ class Service:
             raise DomainError("Choose whether to request missing suggestions.")
         state = self.store.read()
         source = collection_by_id(state, identity)
+        if source.get('family_rolling'):
+            raise DomainError('This shelf is maintained automatically. Improve the broader family collection instead.')
         original = source
         source = copy.deepcopy(source)
         # Accumulate pending choices without changing the live shelf or its revision.
@@ -917,6 +923,14 @@ class Service:
         self.store.update(lambda current: save_review(current, suggestions, reviewed))
         return f"Reviewed {len(reviewed)} new titles; found {len(suggestions)} collection suggestions. Nothing added automatically."
 
+    def configure_family_shelf(self, payload, progress):
+        from .family_shelf import configure
+        return configure(self, payload, progress)
+
+    def refresh_family_shelf(self, progress):
+        from .family_shelf import refresh
+        return refresh(self, progress)
+
     def act_on_arrival(self, identity, action, progress):
         from .new_arrivals import theme_revision, shelves
         state = self.store.read()
@@ -970,12 +984,15 @@ class Service:
              last_drift, drift_hours, self.refresh_drift),
             ("library sync", settings["advanced"].get("sync_enabled", True) and bool(settings.get("plex_token")),
              state["synced_at"], settings.get("library_sync_minutes", 10) / 60, self.sync),
+            ("family shelf", state.get('family_shelf',{}).get('enabled')
+             and state['synced_at'] > state.get('family_shelf',{}).get('last_checked_at',0),
+             state.get('family_shelf',{}).get('last_checked_at',0), 0, self.refresh_family_shelf),
             ("new arrivals", settings["advanced"].get("new_arrival_suggestions") and bool(settings.get("llm_model"))
              and bool(state.get("new_arrivals", {}).get("pending")),
              state.get("new_arrivals", {}).get("last_review_at", 0), 24, self.review_new_arrivals),
         ]
         for kind, enabled, last_success, hours, operation in due:
-            retry_delay = 60 if kind in {"library sync", "request status"} else 86400 if kind == "new arrivals" else 900
+            retry_delay = 60 if kind in {"library sync", "request status"} else 86400 if kind == "new arrivals" else 3600 if kind == 'family shelf' and state.get('family_shelf',{}).get('error') else 60 if kind == 'family shelf' else 900
             if not enabled or now - last_success < hours * 3600 or now - attempts.get(kind, 0) < retry_delay:
                 continue
             def scheduled(progress, run=operation):

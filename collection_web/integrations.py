@@ -63,6 +63,7 @@ def normalize_item(item, library_id):
             "play_count": int(getattr(item, "viewCount", 0) or 0),
             "rating": float(getattr(item, "audienceRating", 0) or getattr(item, "rating", 0) or 0),
             "content_rating": str(getattr(item, "contentRating", "") or ""),
+            "added_at": getattr(item, "addedAt", None).timestamp() if getattr(item, "addedAt", None) else 0,
             "has_art": bool(getattr(item, "thumb", ""))}
 
 
@@ -199,6 +200,28 @@ def publish(settings, candidate, server_id, *, expected_source=None):
             collection.removeItems(removed)
     collection.editSummary(candidate.get("description") or candidate.get("thesis") or "")
     return str(collection.ratingKey)
+
+
+def set_collection_order(settings, candidate, server_id):
+    """Keep a rolling shelf newest-first using Plex's custom collection order."""
+    server = plex(settings)
+    if server.machineIdentifier != server_id:
+        raise DomainError('Plex server changed. Sync before ordering this shelf.')
+    collection = resolve_owned(server, candidate)
+    if collection is None:
+        raise DomainError('Publish the shelf before ordering it.')
+    current = collection.items()
+    ordered = [str(i['id']) for i in candidate['items']]
+    lookup = {str(i.ratingKey):i for i in current}
+    if set(ordered) != set(lookup):
+        raise DomainError('The shelf changed in Plex. Sync before reordering it.')
+    if str(getattr(collection,'collectionSort','')) != '2':
+        collection.sortUpdate(sort='custom')
+    if [str(i.ratingKey) for i in current] != ordered:
+        previous = None
+        for identity in ordered:
+            collection.moveItem(lookup[identity],after=previous)
+            previous = lookup[identity]
 
 
 def set_visibility(settings, candidate, active, server_id=None):

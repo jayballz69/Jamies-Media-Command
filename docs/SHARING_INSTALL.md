@@ -236,6 +236,31 @@ limit fail with a clear message instead of silently reviewing only a subset.
 
 ## New-arrival collection suggestions
 
+### Pinned recent family movies
+
+On **Rotation**, open **Pin a recent family movie shelf**, choose a name and an
+existing managed movie collection to receive older picks. The app fills a shelf
+with up to 25 recently added, family-suitable films for roughly ages 10–16 plus
+adults. Recency uses Plex's added date rather than theatrical release date.
+The curator assesses story, rating and metadata; animation or a PG rating alone
+does not establish suitability. This remains guidance rather than parental control.
+
+The shelf is pinned independently of ordinary rotation slots, while the global
+Plex Home and shared-user visibility settings still apply. After each successful
+library sync, automatic maintenance checks for newer suitable arrivals. Decisions
+are cached; unchanged titles incur no new model calls. Before a departing film
+leaves the capped shelf it is added to the chosen broader collection. Media files
+and existing members of that broader collection are retained. Movies inside the
+new shelf are ordered newest arrival first.
+
+Use **Pause automatic updates** or **Refresh family shelf** on Rotation. Pausing
+keeps the current shelf pinned. The initial fill may make several small model
+calls; ordinary updates review only unassessed or changed metadata. Failed updates
+retain their cache and retry with a delay. The rolling shelf uses its own upkeep
+instead of manual Improve/Add actions.
+
+### Suggestions for other permanent collections
+
 Enable **Collections > New arrivals, familiar shelves > Suggest homes for new
 movies and shows** (also in Advanced settings). Plex sync notices new movies and
 series. Once a day the curator compares up to 40 pending titles with all published

@@ -247,6 +247,15 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
     def review_arrivals():
         return job("Review new arrivals", service.review_new_arrivals)
 
+    @app.post('/api/family-shelf')
+    def configure_family_shelf():
+        payload = body()
+        return job('Configure family shelf',lambda progress:service.configure_family_shelf(payload,progress))
+
+    @app.post('/api/family-shelf/refresh')
+    def refresh_family_shelf():
+        return job('Refresh family shelf',service.refresh_family_shelf)
+
     @app.post("/api/arrivals/<identity>/<action>")
     def arrival_action(identity, action):
         return job("Review arrival suggestion", lambda progress: service.act_on_arrival(identity, action, progress))
