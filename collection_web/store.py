@@ -22,7 +22,8 @@ DEFAULT_SETTINGS = {
     "permanent_movie_slots": 2, "permanent_show_slots": 2, "drift_slots": 4, "drift_tv_slots": 2, "library_sync_minutes": 10,
     "advanced": {"watch_inspiration": True, "schedule_enabled": False, "drift_schedule_enabled": False,
                  "auto_publish": False, "home_enabled": True, "shared_home": False,
-                 "missing_suggestions": True, "diversity": True, "sync_enabled": True},
+                 "missing_suggestions": True, "diversity": True, "sync_enabled": True,
+                 "new_arrival_suggestions": False},
 }
 from .seasonal import DEFAULT_TOGGLES
 DEFAULT_SETTINGS["advanced"].update(DEFAULT_TOGGLES)
@@ -113,6 +114,10 @@ def public_state(state):
     result = {key: value for key, value in state.items()
               if key not in {"settings", "library", "server_id", "history"}}
     result["settings"] = public_settings(state["settings"])
+    if "new_arrivals" in result:
+        result["new_arrivals"] = {key: value for key, value in result["new_arrivals"].items()
+                                  if key not in {"seen", "pending"}}
+        result["new_arrivals"]["pending_count"] = len(state["new_arrivals"].get("pending", []))
     if "migration" in result:
         result["migration"] = {key: value for key, value in result["migration"].items() if key != "excluded_name_hashes"}
     result["library"] = {"count": len(state["library"]),

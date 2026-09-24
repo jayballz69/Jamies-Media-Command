@@ -245,6 +245,8 @@ class Service:
         def apply(current):
             if current["server_id"] and current["server_id"] != server_id:
                 raise DomainError("This is a different Plex server. Use a separate data directory to avoid changing collection identities.")
+            from .new_arrivals import observe
+            observe(current, library)
             current["library"], current["server_id"], current["synced_at"] = library, server_id, time.time()
             if backup_due:
                 current["last_sync_backup_at"] = time.time()
@@ -900,6 +902,46 @@ class Service:
         self.store.update(lambda current: current["collections"].append(candidate))
         return "Imported " + candidate["name"] + " as a draft."
 
+    def review_new_arrivals(self, progress):
+        from .new_arrivals import review, save_review
+        state = self.store.read()
+        progress("Comparing new arrivals with your permanent collections...")
+        try:
+            suggestions, reviewed = review(state, lambda prompt: providers.call_llm(state['settings'], prompt))
+        except Exception:
+            self.store.update(lambda current: current.setdefault('new_arrivals', {}).update(
+                error='Arrival review could not finish. Pending titles are retained; use Review new arrivals to retry.'))
+            raise
+        if not reviewed:
+            return 'No new titles awaiting review, or no published permanent collections yet.'
+        self.store.update(lambda current: save_review(current, suggestions, reviewed))
+        return f"Reviewed {len(reviewed)} new titles; found {len(suggestions)} collection suggestions. Nothing added automatically."
+
+    def act_on_arrival(self, identity, action, progress):
+        from .new_arrivals import theme_revision, shelves
+        state = self.store.read()
+        suggestion = next((s for s in state.get('new_arrivals', {}).get('suggestions', []) if s['id'] == identity), None)
+        if not suggestion or suggestion['status'] != 'pending':
+            raise DomainError('This suggestion has already been handled. Refresh the list.')
+        if action not in {'add', 'dismiss'}:
+            raise DomainError('Choose Add or Dismiss.')
+        if action == 'add':
+            candidate = collection_by_id(state, suggestion['collection_id'])
+            item = next((i for i in state['library'] if str(i['id']) == suggestion['item_id']), None)
+            if candidate not in shelves(state) or not item:
+                raise DomainError('The collection or title is no longer available. Sync Plex first.')
+            if theme_revision(candidate) != suggestion['theme_revision']:
+                raise DomainError('This collection’s theme changed. Sync Plex, then review new arrivals again.')
+            if item['media_type'] != candidate['media_type']:
+                raise DomainError('The title no longer matches this collection’s library.')
+            if str(item['id']) not in {str(i['id']) for i in candidate['items']}:
+                self._add_items(candidate, [dict(item, reason=suggestion['reason'])], state, progress)
+        def save(current):
+            target = next(s for s in current['new_arrivals']['suggestions'] if s['id'] == identity)
+            target.update(status='added' if action == 'add' else 'dismissed', handled_at=time.time())
+        self.store.update(save)
+        return ('Added ' if action == 'add' else 'Dismissed suggestion for ') + suggestion['title'] + ' / ' + suggestion['collection_name'] + '.'
+
     def schedule_once(self, now=None):
         state = self.store.read()
         settings = state["settings"]
@@ -928,9 +970,12 @@ class Service:
              last_drift, drift_hours, self.refresh_drift),
             ("library sync", settings["advanced"].get("sync_enabled", True) and bool(settings.get("plex_token")),
              state["synced_at"], settings.get("library_sync_minutes", 10) / 60, self.sync),
+            ("new arrivals", settings["advanced"].get("new_arrival_suggestions") and bool(settings.get("llm_model"))
+             and bool(state.get("new_arrivals", {}).get("pending")),
+             state.get("new_arrivals", {}).get("last_review_at", 0), 24, self.review_new_arrivals),
         ]
         for kind, enabled, last_success, hours, operation in due:
-            retry_delay = 60 if kind in {"library sync", "request status"} else 900
+            retry_delay = 60 if kind in {"library sync", "request status"} else 86400 if kind == "new arrivals" else 900
             if not enabled or now - last_success < hours * 3600 or now - attempts.get(kind, 0) < retry_delay:
                 continue
             def scheduled(progress, run=operation):

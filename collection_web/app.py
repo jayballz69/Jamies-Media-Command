@@ -243,6 +243,14 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
     def refresh_requests():
         return job("Refresh request progress", service.refresh_requests)
 
+    @app.post("/api/arrivals/review")
+    def review_arrivals():
+        return job("Review new arrivals", service.review_new_arrivals)
+
+    @app.post("/api/arrivals/<identity>/<action>")
+    def arrival_action(identity, action):
+        return job("Review arrival suggestion", lambda progress: service.act_on_arrival(identity, action, progress))
+
     @app.post("/api/library/sync")
     def sync():
         return job("Sync library", service.sync)

@@ -233,3 +233,23 @@ whole permanent set. It saves a report of collection flavour, useful overlap and
 owned additions. No titles are moved, removed, or requested. Individual Improve
 also considers neighbouring collections. Large sets that exceed the review context
 limit fail with a clear message instead of silently reviewing only a subset.
+
+## New-arrival collection suggestions
+
+Enable **Collections > New arrivals, familiar shelves > Suggest homes for new
+movies and shows** (also in Advanced settings). Plex sync notices new movies and
+series. Once a day the curator compares up to 40 pending titles with all published
+permanent collections, using their themes, existing members and the new titles'
+metadata. Further titles wait for the next daily batch, or **Review new arrivals**.
+The first sync establishes a baseline; existing episodes and file upgrades do not
+trigger repeat recommendations. Arrivals discovered while this option is off are
+not queued. Existing pending reviews and suggestions are retained when paused.
+
+Suggestions appear here and in each collection's **Could complete the picture**.
+Each explains its fit. Choose **Add to collection** or **Dismiss**; detection and
+AI review never change Plex membership. Collections imported from Plex must first
+be managed here before adding. Dismissals are remembered, provider failures keep
+pending titles for retry, and automatic retries run at most once a day. Changed
+collection themes require a new review. Ordinary scans with no arrivals cost no
+AI calls. Temporary Drift shelves are outside this feature; kept Drift shelves
+retain their existing additional fit review when adding a title.
