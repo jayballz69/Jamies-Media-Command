@@ -11,6 +11,7 @@ from plexapi.server import PlexServer
 from plexapi.exceptions import PlexApiException
 
 from .store import DomainError
+from .matching import external_ids
 
 
 def clean(value):
@@ -54,6 +55,11 @@ def tags(item, attribute):
 
 
 def normalize_item(item, library_id):
+    identities = {}
+    for guid in getattr(item, "guids", []) or []:
+        provider, separator, value = str(getattr(guid, "id", "")).partition("://")
+        if separator:
+            identities[provider] = value
     return {"id": str(item.ratingKey), "title": item.title, "year": int(item.year or 0),
             "media_type": item.type, "library_id": str(library_id),
             "genres": tags(item, "genres"), "summary": str(getattr(item, "summary", "") or ""),
@@ -64,7 +70,8 @@ def normalize_item(item, library_id):
             "rating": float(getattr(item, "audienceRating", 0) or getattr(item, "rating", 0) or 0),
             "content_rating": str(getattr(item, "contentRating", "") or ""),
             "added_at": getattr(item, "addedAt", None).timestamp() if getattr(item, "addedAt", None) else 0,
-            "has_art": bool(getattr(item, "thumb", ""))}
+            "has_art": bool(getattr(item, "thumb", "")),
+            "external_ids": external_ids({"external_ids": identities})}
 
 
 def scan_library(settings, progress):
@@ -77,7 +84,7 @@ def scan_library(settings, progress):
         if selected and selected != section.title:
             continue
         progress(f"Reading {section.title}…")
-        items = section.all()
+        items = section.all(includeGuids=True)
         rows.extend(normalize_item(item, section.key) for item in items)
         for collection in section.collections():
             hub = collection.visibility()
@@ -296,6 +303,7 @@ def title_metadata(settings, item, *, strict=False):
         return None
     genres = match.get("genres")
     return {"id": "external:" + str(external_id), "external_source": "tvdb" if media == "show" else "tmdb",
+            "external_ids": external_ids({"external_ids": {"tmdb": match.get("tmdbId"), "tvdb": match.get("tvdbId"), "imdb": match.get("imdbId")}}),
             "title": item["title"], "catalog_title": match["title"], "year": match["year"], "media_type": media,
             "summary": str(match.get("overview") or "")[:4000],
             "genres": [tag[:120] for tag in genres if isinstance(tag, str)][:20] if isinstance(genres, list) else [],
@@ -348,7 +356,8 @@ def trakt_items(settings, url, media_type):
         for row in response.json():
             title = row.get(media_type, {})
             if title.get("title") and title.get("year"):
-                result.append({"title": title["title"], "year": int(title["year"]), "media_type": media_type})
+                result.append({"title": title["title"], "year": int(title["year"]), "media_type": media_type,
+                               "external_ids": external_ids({"external_ids": title.get("ids", {})})})
         if page >= int(response.headers.get("X-Pagination-Page-Count", "1")):
             return result
     raise DomainError("That Trakt list is too large. Choose a list with at most 2,000 titles.")

@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import uuid
 
 from . import integrations as providers
+from .matching import external_ids, id_relation, library_matches
 from .seasonal import active_events, context_key, seasonal_rank
 from .store import DEFAULT_SETTINGS, DomainError, SECRETS, event
 
@@ -78,25 +79,27 @@ def validate_settings(payload, current):
 
 def match_titles(titles, library, media_type):
     owned, missing = [], []
-    seen = set()
+    seen, owned_ids = set(), set()
     for row in titles:
         title, year = str(row.get("title") or "").strip(), int(row.get("year") or 0)
         if not title or not 1870 <= year <= 2200:
             raise DomainError("Each title needs a release year, for example Alien (1979).")
-        identity = (providers.clean(title), year)
+        identity = (providers.clean(title), year, tuple(sorted(external_ids(row).items())))
         if identity in seen:
             continue
         seen.add(identity)
-        matches = [item for item in library if item["media_type"] == media_type
-                   and providers.clean(item["title"]) == identity[0] and item["year"] == year]
+        matches = library_matches(dict(row, title=title, year=year), library, media_type)
         if len(matches) == 1:
+            if str(matches[0]['id']) in owned_ids:
+                continue
+            owned_ids.add(str(matches[0]['id']))
             owned.append(copy.deepcopy(matches[0]))
             if row.get("reason") and row["reason"] not in {"Ambiguous library match", "Not in the synced library"}:
                 owned[-1]["reason"] = row["reason"]
         else:
             missing.append({"title": title, "year": year, "media_type": media_type,
                             "reason": "Ambiguous library match" if matches else row.get("reason", "Not in the synced library")})
-            for key in ("requested_at", "request_status", "fit_reason", "metadata", "metadata_status", "metadata_checked_at", "metadata_error", "fit_status", "request_progress", "request_error", "request_checked_at"):
+            for key in ("external_ids", "requested_at", "request_status", "fit_reason", "metadata", "metadata_status", "metadata_checked_at", "metadata_error", "fit_status", "request_progress", "request_error", "request_checked_at"):
                 if key in row:
                     missing[-1][key] = row[key]
     if owned and len({r["library_id"] for r in owned}) > 1:
@@ -110,6 +113,12 @@ def possible_matches(row, library):
     matches = []
     for item in library:
         if row.get('media_type') and item.get('media_type') != row['media_type']:
+            continue
+        relation = id_relation(row, item)
+        if relation == 'match':
+            matches.append({key: item[key] for key in ("id", "title", "year", "media_type")})
+            continue
+        if relation == 'conflict':
             continue
         actual = providers.clean(item["title"])
         close_year = not item.get("year") or abs(item["year"] - year) <= 1
@@ -150,6 +159,7 @@ def reconcile_suggestions(candidate, library):
     """Keep external requests, owned additions and existing members distinct."""
     members = {(providers.clean(row["title"]), row["year"]) for row in candidate.get("items", [])}
     seen, available, missing = set(members), [], []
+    member_ids = {str(row['id']) for row in candidate.get('items', [])}
     for row in candidate.get("missing", []) + candidate.get("available", []):
         key = (providers.clean(row["title"]), row["year"])
         if key in seen:
@@ -158,12 +168,15 @@ def reconcile_suggestions(candidate, library):
         owned, absent = match_titles([row], library, candidate["media_type"])
         if owned:
             item = owned[0]
+            if str(item['id']) in member_ids:
+                continue
+            member_ids.add(str(item['id']))
             for field in ("requested_at", "request_status", "arrival_review_error", "request_progress", "request_error", "request_checked_at"):
                 if field in row:
                     item[field] = row[field]
             available.append(item)
         else:
-            potential = possible_matches(row, library)
+            potential = possible_matches(dict(row, media_type=candidate["media_type"]), library)
             if potential:
                 absent[0].update(reason="Ambiguous library match", possible_matches=potential,
                                  fit_reason=row.get("fit_reason", row.get("reason", "")))
@@ -523,6 +536,51 @@ class Service:
                 current.append(pick)
         return chosen
 
+    def rotation_preview(self):
+        """Preview the current selectors without publishing or advancing clocks."""
+        state = self.store.read()
+        settings = state['settings']
+        permanent = self._permanent_choices(state)
+        drift_ids = self._choose_pool(state) if state['drift'].get('pool_ids') else []
+        selected = {c['id'] for c in permanent} | set(drift_ids)
+        pinned, excluded = [], []
+        def brief(c, reason=''):
+            return {key: c.get(key) for key in ('id', 'name', 'media_type')} | {'reason': reason}
+        for c in state['collections']:
+            if c['status'] == 'archived':
+                continue
+            if c.get('pinned_home') and c.get('managed') and c['status'] == 'published':
+                pinned.append(brief(c, 'Pinned independently of rotation'))
+                continue
+            if c['id'] in selected:
+                continue
+            if not c.get('managed'):
+                reason = 'Managed outside this app'
+            elif self.temporary(c):
+                if c['id'] not in state['drift'].get('pool_ids', []):
+                    reason = 'Outside the current weekly pool'
+                else:
+                    from .curation import validate_candidate
+                    reason = ('Needs a fresh review' if validate_candidate(c, state['library'])
+                              else 'Other shelves have priority for the next slots')
+            elif c['status'] != 'published':
+                reason = 'Publish this draft to join rotation'
+            elif not c.get('rotation_enabled'):
+                reason = 'Rotation is off for this collection'
+            else:
+                reason = 'Other shelves have priority for the next slots'
+            excluded.append(brief(c, reason))
+        return {'permanent': [brief(c) for c in permanent],
+                'drift': [brief(c) for identity in drift_ids for c in state['collections'] if c['id'] == identity],
+                'pinned': pinned, 'excluded': excluded,
+                'home_enabled': settings['advanced']['home_enabled'],
+                'busy': self.busy,
+                'permanent_scheduled': settings['advanced']['schedule_enabled'],
+                'drift_scheduled': settings['advanced']['drift_schedule_enabled'] and settings['advanced']['auto_publish'],
+                'pool_refresh_due': (time.time() - state['drift'].get('last_generated_at', 0)
+                    >= settings.get('drift_generation_hours', 168) * 3600
+                    or context_key(active_events(settings)) != state['drift'].get('seasonal_context', ''))}
+
     def _choose_pool(self, state):
         from .curation import validate_candidate
         settings = state["settings"]
@@ -773,6 +831,7 @@ class Service:
                         else:
                             item.update(metadata=metadata, metadata_status="verified" if metadata else "needs_check",
                                         metadata_checked_at=time.time(), metadata_error="")
+                reconcile_suggestions(row, current["library"])
         self.store.update(save)
         if state["settings"].get("llm_url") and state["settings"].get("llm_model"):
             try:

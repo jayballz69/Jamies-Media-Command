@@ -331,13 +331,34 @@ function renderRotation() {
   const liveDrift = activeDrift();
   const slots = shelfSlots();
   const settings = state.settings || {};
-  return `${heading('Keep Home moving.', 'Permanent favourites and temporary discoveries, side by side.', button('Rotate permanent shelves', 'rotate', {glyph: 'rotation', disabled: (!inPool.length && !onHome.some(c => c.managed)) || running('rotation')}), 'ROTATION')}
+  return `${heading('Keep Home moving.', 'Permanent favourites and temporary discoveries, side by side.', button('Preview next shelves', 'rotation-preview', {kind: 'secondary', glyph: 'clock'}) + button('Rotate permanent shelves', 'rotate', {glyph: 'rotation', disabled: (!inPool.length && !onHome.some(c => c.managed)) || running('rotation')}), 'ROTATION')}
     <section class="drift-intro"><div><span class="eyebrow">ROOM FOR BOTH</span><h2>Up to ${num(slots.movies + slots.shows + slots.drift)} shelves. Two different rhythms.</h2><p>Your permanent collection pool supplies ${num(slots.movies)} movie shelves and ${num(slots.shows)} TV shelves. Drift adds ${num(slots.drift)} newly curated shelves alongside them, then replaces its own batch on a separate schedule.</p><div class="drift-meta"><span>${icon('collections')}${num(inPool.length)} permanent collections in rotation</span><span>${icon('drift')}${num(liveDrift.length)} active Drift collections</span><button class="text-link" data-action="settings">Automation settings ${icon('arrow')}</button></div></div><div class="icon-emblem" aria-hidden="true">${icon('rotation')}</div></section>
     ${renderFamilyShelf()}
     ${rotationSetup()}
     <section class="section" data-permanent-home><div class="section-heading"><div><h2>Permanent shelves</h2><p>${num(onHome.filter(c => typeIcon(c.media_type) === 'film').length)} / ${num(slots.movies)} movies · ${num(onHome.filter(c => typeIcon(c.media_type) === 'tv').length)} / ${num(slots.shows)} TV shows · ${esc(nextCycle(state.last_rotation_at, settings.rotation_hours ?? 24, settings.advanced?.schedule_enabled))}</p></div></div>${onHome.length ? `<div class="collection-grid">${onHome.map((c, i) => collectionCard(c, i)).join('')}</div>` : empty('Your favourites have room here', 'Add published collections to the permanent pool, then rotate them onto Home.', '', '', 'collections')}</section>
     <section class="section" data-drift-live><div class="section-heading"><div><h2>Drift shelves</h2><p>${num(liveDrift.filter(c => c.home).length)} / ${num(slots.drift)} on Home · ${esc(nextCycle(state.drift?.last_activated_at, settings.drift_interval_hours ?? 48, settings.advanced?.drift_schedule_enabled))}</p></div>${button('Generate weekly pool', 'generate', {kind: 'secondary', glyph: 'drift', disabled: running('drift') || !state.library?.count})}</div>${liveDrift.length ? `<div class="collection-grid">${liveDrift.map(driftCard).join('')}</div>` : empty('A little space for discovery', 'Refresh Drift to create a batch of temporary collections alongside your permanent shelves.', '', '', 'drift')}</section>
     <section class="section" data-permanent-pool><div class="section-heading"><div><h2>Permanent rotation pool</h2><p>Choose the collections that can take a permanent movie or TV slot. Kept Drift collections belong here too.</p></div></div>${!shelves.length ? empty('Start your permanent pool', 'Publish a collection or keep a Drift favourite to give your permanent shelves something to show.', 'collections', 'Browse collections', 'home') : `<div class="collection-grid">${shelves.map((c, i) => `<article class="collection-card"><button class="collection-open" data-action="open" data-id="${esc(c.id)}" aria-label="Review ${esc(c.name)}">${cover(c, i)}<div class="collection-meta"><div><h3>${esc(c.name)}</h3><p>${num(list(c.items).length)} titles${c.home ? ' · Currently on Home' : c.managed ? ' · Permanent collection' : ' · Imported from Plex'}</p></div></div></button>${c.managed ? rotationToggle(c) : `<div class="card-review-actions">${button('Manage rotation here', 'adopt', {id: c.id, kind: 'secondary', small: true, glyph: 'rotation'})}</div>`}</article>`).join('')}</div>`}</section>`;
+}
+async function openRotationPreview() {
+  createDialog.innerHTML = `<h2 id="create-title">Up next on Home</h2><p role="status">Checking the current rotation pool?</p><div class="actions">${button('Done', 'close-create', {kind: 'ghost'})}</div>`;
+  createDialog.showModal();
+  try {
+    const preview = await api('/api/rotation/preview');
+    if (!createDialog.open || !createDialog.querySelector('[role="status"]')) return;
+    const rows = items => list(items).map(c => `<div class="media-item"><div class="item-info"><strong>${esc(c.name)}</strong><p>${esc(typeName(c.media_type))}${c.reason ? ` ? ${esc(c.reason)}` : ''}</p></div></div>`).join('');
+    const group = (name, items, note) => `<section class="section"><h3>${esc(name)}</h3><p class="detail-note">${esc(note)}</p>${list(items).length ? rows(items) : '<p class="detail-note">No eligible shelves.</p>'}</section>`;
+    createDialog.innerHTML = `<h2 id="create-title">Up next on Home</h2><p>Based on your saved settings and current pool. Permanent rotation and Drift switch separately.</p>
+      ${!preview.home_enabled ? '<p class="detail-note">Plex Home is disabled. These choices will not activate until you enable it.</p>' : ''}
+      ${preview.busy ? '<p class="detail-note">A task is running; these choices may change when it finishes.</p>' : ''}
+      ${rotationEdits ? '<p class="detail-note">Save your rotation edits to include them in this preview.</p>' : ''}
+      ${group('Permanent shelves', preview.permanent, preview.permanent_scheduled ? 'For the next permanent rotation. Shelves off Home and those shown longest ago take priority.' : 'Schedule off. These are the choices for Rotate permanent shelves.')}
+      ${group('Drift shelves', preview.drift, preview.pool_refresh_due ? 'For Switch shelves using the current pool. A new weekly or seasonal generation is due and may change the scheduled choices.' : preview.drift_scheduled ? 'For the next switch within this weekly pool. Seasonal shelves have priority while their occasion is active.' : 'For a manual Switch shelves using the saved pool.')}
+      ${list(preview.pinned).length ? group('Staying on Home', preview.pinned, 'These do not use rotating slots.') : ''}
+      ${list(preview.excluded).length ? `<details><summary>Why other shelves are not next (${num(preview.excluded.length)})</summary>${rows(preview.excluded)}</details>` : ''}
+      <div class="actions">${button('Done', 'close-create', {kind: 'ghost'})}</div>`;
+  } catch (error) {
+    if (createDialog.open && createDialog.querySelector('[role="status"]')) createDialog.querySelector('[role="status"]').textContent = error.message;
+  }
 }
 function rotationSetup() {
   const s = {...state.settings, ...rotationEdits};
@@ -648,6 +669,7 @@ document.addEventListener('click', async event => {
   if (action === 'sync') return runAction(el, '/api/library/sync', {}, 'Library sync started. You can keep browsing.');
   if (action === 'switch-drift') return runAction(el, '/api/drift/switch', {}, 'Switching shelves from the saved weekly pool.');
   if (action === 'generate') return runAction(el, '/api/drift/generate', {}, state.settings?.advanced?.auto_publish ? 'Generating a weekly pool. Reviewed choices are saved; only your Home slots publish now.' : 'Creating new Drift drafts for you to review.');
+  if (action === 'rotation-preview') return openRotationPreview();
   if (action === 'rotate') return runAction(el, '/api/rotation/run', {}, 'Refreshing your permanent shelves on Plex Home.');
   if (action === 'legacy-import') return runAction(el, '/api/import', {}, 'Reading your previous collections.');
   if (action === 'publish') return runAction(el, `/api/collections/${encodeURIComponent(id)}/publish`, {}, 'Publishing this collection to Plex.');

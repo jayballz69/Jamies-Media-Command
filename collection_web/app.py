@@ -287,6 +287,10 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
     def rotate():
         return job("Rotate Plex Home", service.rotate)
 
+    @app.get("/api/rotation/preview")
+    def rotation_preview():
+        return jsonify(service.rotation_preview())
+
     @app.post("/api/collections")
     def create_collection():
         idle()
