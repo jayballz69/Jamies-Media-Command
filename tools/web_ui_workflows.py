@@ -327,7 +327,7 @@ def exercise_workflows(page: Page, backend: MockBackend, passed: list[str]) -> N
     page.set_viewport_size({"width": 390, "height": 844})
     mobile_routes = [
         ("collections", "Collections", "Collections"),
-        ("overview", "Overview", "Your library, thoughtfully collected."),
+        ("overview", "Overview", "Your library at a glance."),
         ("settings", "Settings", "Make it yours."),
         ("rotation", "Rotation", "Keep Home moving."),
     ]
@@ -360,6 +360,7 @@ def exercise_workflows(page: Page, backend: MockBackend, passed: list[str]) -> N
         "rotation_hours": "24", "drift_interval_hours": "48",
     }.items():
         expect(page.locator(f'#rotation-form [name="{key}"]')).to_have_value(value)
+    page.locator('#rotation-schedule > summary').click()
     page.locator('#rotation-form [name="drift_interval_hours"]').fill("24")
     page.locator('#rotation-form [name="drift_tv_slots"]').fill("1")
     page.locator('#rotation-form [name="drift_pool_size"]').fill("16")
@@ -400,7 +401,7 @@ def exercise_workflows(page: Page, backend: MockBackend, passed: list[str]) -> N
     page.locator('a[href="#drift"]').click()
     expect(page.locator("[data-drift-live] .collection-card")).to_have_count(4)
     expect(page.locator(".drift-intro")).to_contain_text("Auto-publish after review")
-    expect(page.locator('.heading-actions [data-action="generate"]')).to_have_text("Generate weekly pool")
+    expect(page.locator('.heading-actions [data-action="generate"]')).to_have_text("Generate ideas")
     passed.append("Four live temporary Drift shelves stay separate from four permanent Home shelves")
 
     page.locator('[data-drift-live] [data-action="keep"][data-id="drift-0"]').click()
@@ -422,7 +423,7 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
             if page.locator(selector).count():
                 page.keyboard.press("Escape")
         page.goto(ORIGIN + "/#collections")
-        page.locator('[data-filter="all"]').click()
+        page.locator('#collection-status').select_option('all')
         page.locator('.heading-actions [data-action="create"]').click()
 
     pasted = "Shared Journeys\n1. Test Film (2001)\n- Another Film (2002)"
@@ -473,7 +474,7 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     payload = backend.latest_payload("/api/collections/discover")
     if payload != {"media_type": "movie", "mode": "library", "prompt": "", "limit": 12, "auto_request": False}:
         raise AssertionError(f"Random library discovery sent incorrect options: {payload!r}")
-    expect(page.locator('[data-filter="draft"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('#collection-status')).to_have_value('draft')
     passed.append("Blank-prompt discovery requests a random library-only draft")
 
     open_create()
@@ -499,7 +500,7 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     ]
     for mode, goal, auto_request in cases:
         page.goto(ORIGIN + "/#collections")
-        page.locator('[data-filter="all"]').click()
+        page.locator('#collection-status').select_option('all')
         page.locator('[data-action="open"][data-id="source"]').click()
         page.locator('#collection-dialog .dialog-heading [data-action="improve"]').click()
         expect(page.locator('#discovery-form [name="media_type"]')).to_have_count(0)
@@ -549,7 +550,7 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     backend.collection("source")["available"] = [dict(SAMPLE_ITEM, id="available-owned", title="Ready Owned Film", reason="Its isolated expedition matches this collection's premise.")]
     backend.collection("source")["missing"] = [dict(SAMPLE_ITEM, id="not-owned", title="Genuinely Missing Film", reason="A shared survival problem makes this a strong fit.")]
     advance_poll(page, 16000)
-    page.locator('[data-filter="all"]').click()
+    page.locator('#collection-status').select_option('all')
     page.locator('[data-action="open"][data-id="source"]').click()
     available = page.locator('[data-collection-suggestions] [data-action="add-available"][data-id="source"]')
     expect(page.locator("[data-collection-suggestions]")).to_have_count(1)
@@ -571,7 +572,7 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     advance_poll(page, 16000)
     page.locator('a[href="#drift"]').click()
     page.locator('[data-action="drift-history"]').click()
-    expect(page.locator('[data-filter="drift-history"]')).to_have_attribute("aria-pressed", "true")
+    expect(page.locator('#collection-status')).to_have_value('drift-history')
     expect(page.locator('[data-action="open"][data-id="old-drift"]')).to_have_count(1)
     expect(page.locator('[data-action="open"][data-id="old-manual"]')).to_have_count(0)
     passed.append("Drift history opens archived Drift collections without mixing in manual archives")
@@ -580,7 +581,7 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     if backend.latest_payload("/api/collections/old-drift/keep") != {}:
         raise AssertionError("Restoring a past Drift shelf used the wrong payload.")
     page.keyboard.press("Escape")
-    page.locator('[data-filter="all"]').click()
+    page.locator('#collection-status').select_option('all')
     page.locator('[data-action="open"][data-id="source"]').click()
     page.locator('[data-tab="story"]').click()
     page.locator('[data-action="describe"]').click()
