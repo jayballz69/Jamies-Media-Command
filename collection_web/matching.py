@@ -3,6 +3,30 @@
 import re
 
 
+def request_identity(row):
+    """Stable confirmed selection, independent of array order and request status."""
+    return (row.get('media_type'), str(row.get('title', '')).strip().casefold(),
+            row.get('year'), tuple(sorted(external_ids(row).items())))
+
+
+def catalog_matches(item, rows):
+    """Require known catalogue identities; only unidentified titles use names."""
+    from .integrations import catalog_title_matches
+    known = external_ids(item)
+    matches = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ids = external_ids({'external_ids': {'tmdb': row.get('tmdbId'), 'tvdb': row.get('tvdbId'), 'imdb': row.get('imdbId')}})
+        if known:
+            if not all(ids.get(key) == value for key, value in known.items()):
+                continue
+        elif not catalog_title_matches(row, item):
+            continue
+        matches.append(row)
+    return matches
+
+
 def external_ids(row):
     """Read validated provider IDs, including previously saved lookup metadata."""
     result = {}

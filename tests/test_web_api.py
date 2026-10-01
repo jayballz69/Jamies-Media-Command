@@ -62,6 +62,19 @@ def test_invalid_settings_do_not_partially_commit(app):
     assert client.post("/api/settings", json={"permanent_movie_slots": 999}, headers=headers).status_code == 400
 
 
+def test_request_route_rejects_old_positional_clients(app):
+    from unittest.mock import patch
+    client = app.test_client()
+    headers = login(client)
+    draft = client.post('/api/collections', json={'name':'Missing films','titles':'Example (2020)'}, headers=headers).json
+    with patch.object(app.extensions['collection_service'], 'submit') as submit:
+        for payload in ({'index':0}, {'all':True}):
+            result = client.post(f"/api/collections/{draft['id']}/request", json=payload, headers=headers)
+            assert result.status_code == 400
+            assert 'Reload' in result.json['error']
+        submit.assert_not_called()
+
+
 def test_editing_draft_preserves_existing_request_tracking(app):
     client = app.test_client()
     headers = login(client)

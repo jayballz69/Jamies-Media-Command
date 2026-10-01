@@ -216,7 +216,7 @@ class MockBackend:
                     self.fail_next_missing_request = False
                     route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "The request service is temporarily unavailable."}))
                     return
-                selected = row["missing"] if body.get("all") else [row["missing"][body["index"]]]
+                selected = [i for i in row["missing"] if any(i["title"] == pick["title"] for pick in body["selections"])]
                 for item in selected:
                     item["requested_at"] = 1700000000
                 payload = self.completed_job("Request missing titles")
@@ -455,7 +455,7 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     page.locator('#create-form button[type="submit"]').click()
     expect(page.locator("#collection-dialog[open] #dialog-title")).to_have_text("A Named Import")
     created = backend.state["collections"][-1]
-    if backend.latest_payload(f"/api/collections/{created['id']}/request") != {"all": True}:
+    if len(backend.latest_payload(f"/api/collections/{created['id']}/request")["selections"]) != len(created["missing"]):
         raise AssertionError("Opted-in pasted imports did not request all missing titles.")
     if backend.latest_payload("/api/collections")["media_type"] != "show":
         raise AssertionError("Paste import did not preserve the chosen TV library.")
@@ -642,7 +642,7 @@ def exercise_mobile_requests(page, backend, passed):
     page.locator('[data-request-confirm]').click()
     expect(page.locator('[data-request-status]')).to_have_text('Test draft operation completed.')
     expect(page.locator('[data-request-confirm]')).to_be_hidden()
-    assert backend.latest_payload('/api/collections/phone-request/request') == {'all': True}
+    assert len(backend.latest_payload('/api/collections/phone-request/request')['selections']) == 2
     page.locator('[data-request-close]').click()
     expect(page.locator('#collection-dialog')).to_be_visible()
     passed.append('Phone bulk requests work without native confirm; Cancel is inert and errors remain visible with retry')
@@ -651,11 +651,13 @@ def exercise_mobile_requests(page, backend, passed):
     advance_poll(page, 16000)
     page.locator('[data-action="request"][data-index="1"]').click()
     expect(page.locator('#request-title')).to_have_text('Request Missing Two?')
+    backend.collection('phone-request')['missing'].reverse()
+    advance_poll(page, 16000)
     page.locator('[data-request-confirm]').click()
     expect(page.locator('[data-request-confirm]')).to_be_hidden()
-    assert backend.latest_payload('/api/collections/phone-request/request') == {'index': 1}
-    assert not backend.collection('phone-request')['missing'][0].get('requested_at')
-    passed.append('Phone single-title request sends only the selected suggestion')
+    assert [r['title'] for r in backend.latest_payload('/api/collections/phone-request/request')['selections']] == ['Missing Two']
+    assert not next(i for i in backend.collection('phone-request')['missing'] if i['title']=='Missing One').get('requested_at')
+    passed.append('Phone single-title confirmation retains its title across reordered background updates')
 
 
 def exercise_arrival_acceptance(page, backend, passed):
@@ -700,6 +702,21 @@ def exercise_remember_device(page, passed):
     passed.append('Phone login defaults to remembering the device and sends an explicit boolean opt-out')
 
 
+def exercise_expired_dialogs(page, backend, passed):
+    page.goto(ORIGIN + '/#collections')
+    page.reload()
+    page.locator('[data-action="open"][data-id="source"]').click()
+    page.locator('#collection-dialog .dialog-heading [data-action="improve"]').click()
+    page.route('**/api/state', lambda route: route.fulfill(status=401,json={'error':'Sign in to continue.'}))
+    advance_poll(page, 16000)
+    expect(page.locator('#login-form')).to_be_visible()
+    expect(page.locator('dialog[open]')).to_have_count(0)
+    expect(page.locator('#collection-dialog')).to_be_empty()
+    expect(page.locator('#create-dialog')).to_be_empty()
+    page.unroute('**/api/state')
+    passed.append('Expired authentication closes and clears nested dialogs so mobile sign-in is usable')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-channel", default="chrome")
@@ -730,13 +747,14 @@ def main() -> int:
                 exercise_mobile_requests(page, backend, passed)
                 exercise_arrival_acceptance(page, backend, passed)
                 exercise_remember_device(page, passed)
+                exercise_expired_dialogs(page, backend, passed)
             finally:
                 browser.close()
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
 
     success = (
-        len(passed) == 28
+        len(passed) == 29
         and not failure
         and not page_errors
         and not backend.unexpected_requests

@@ -102,7 +102,7 @@ function openRequestConfirmation(id, index = null) {
     note.className = 'detail-note';
     note.textContent = `Sending your request to ${service}…`;
     try {
-      const result = await api(`/api/collections/${encodeURIComponent(id)}/request`, {method: 'POST', body: index === null ? {all: true} : {index}});
+      const result = await api(`/api/collections/${encodeURIComponent(id)}/request`, {method: 'POST', body: {selections: selected}});
       requestJobId = result.id;
       submit.style.display = 'none';
       dialog.querySelector('[data-request-close]').textContent = 'Keep browsing';
@@ -203,10 +203,19 @@ async function api(url, {method = 'GET', body} = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401 && url !== '/api/login') { authenticated = false; renderLogin(); }
+    if (response.status === 401 && url !== '/api/login') endSession();
     throw new Error(typeof data.error === 'string' ? data.error : typeof data.message === 'string' ? data.message : `The request could not be completed (${response.status}).`);
   }
   return data;
+}
+function endSession() {
+  authenticated = false; state = null; csrf = ''; detailId = null;
+  collectionEdits.clear(); improvementJobs.clear(); connectionOptionRequests.clear();
+  rotationEdits = null; settingsDirty = false; requestJobId = null;
+  lastJobStates.clear(); lastStateFingerprint = ''; clearTimeout(refreshTimer);
+  for (const dialog of document.querySelectorAll('dialog')) { dialog.close(); dialog.innerHTML = ''; }
+  document.querySelector('#toasts').replaceChildren();
+  renderLogin();
 }
 function activeCollections() { return list(state?.collections).filter(c => c.status !== 'archived'); }
 function candidates() { return activeCollections().filter(c => c.origin === 'drift' && c.status === 'draft'); }
@@ -692,6 +701,7 @@ async function refresh({render = true, quiet = false} = {}) {
 async function fetchState({render, quiet}) {
   try {
     const next = await api('/api/state');
+    if (!authenticated) return;
     const fingerprint = JSON.stringify([next.collections, next.library, next.family_shelf, next.new_arrivals, next.drift, next.activity, next.settings, next.last_rotation_at, list(next.jobs).map(job => [job.id, job.status])]);
     let completed = false;
     for (const job of list(next.jobs)) {
@@ -840,7 +850,7 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'logout') {
-    try { await api('/api/logout', {method: 'POST', body: {}}); authenticated = false; state = null; csrf = ''; collectionEdits.clear(); rotationEdits = null; clearTimeout(refreshTimer); renderLogin(); }
+    try { await api('/api/logout', {method: 'POST', body: {}}); endSession(); }
     catch (error) { toast(error.message, true); }
   }
 });
@@ -978,7 +988,7 @@ document.addEventListener('submit', async event => {
       const result = await api('/api/collections', {method: 'POST', body: data});
       let requestError = '';
       if (autoRequest && list(result.missing).length) {
-        try { await api(`/api/collections/${encodeURIComponent(result.id)}/request`, {method:'POST',body:{all:true}}); }
+        try { await api(`/api/collections/${encodeURIComponent(result.id)}/request`, {method:'POST',body:{selections: result.missing.filter(requestable)}}); }
         catch (error) { requestError = error.message; }
       }
       createDialog.close(); await refresh(); toast('Draft created. Review the matches before publishing.');

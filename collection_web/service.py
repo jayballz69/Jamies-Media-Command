@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import uuid
 
 from . import integrations as providers
-from .matching import external_ids, id_relation, library_matches
+from .matching import external_ids, id_relation, library_matches, request_identity
 from .seasonal import active_events, context_key, seasonal_rank
 from .store import DEFAULT_SETTINGS, DomainError, SECRETS, event
 
@@ -712,7 +712,18 @@ class Service:
     def request_missing(self, identity, payload, progress):
         state = self.store.read()
         candidate = collection_by_id(state, identity)
-        if payload.get("all") is True:
+        if 'selections' in payload:
+            selections = payload['selections']
+            if not isinstance(selections, list) or not selections or len(selections) > 1000 or any(not isinstance(row, dict) for row in selections):
+                raise DomainError('Choose missing titles and confirm again.')
+            indices = []
+            for selection in selections:
+                matches = [i for i, row in enumerate(candidate['missing']) if request_identity(row) == request_identity(selection)]
+                if len(matches) != 1:
+                    raise DomainError('The missing-title list changed. Refresh and confirm your selection again.')
+                if matches[0] not in indices:
+                    indices.append(matches[0])
+        elif payload.get("all") is True:
             indices = list(range(len(candidate["missing"])))
         else:
             try:
@@ -946,6 +957,19 @@ class Service:
         replacement.update(items=draft["items"], missing=draft["missing"], available=draft.get("available", []), description=draft["description"],
                            thesis=draft["thesis"], origin="manual", permanent=True,
                            auto_add_arrivals=draft.get("auto_add_arrivals", source.get("auto_add_arrivals", False)))
+        replacement = copy.deepcopy(replacement)
+        tracked = [row for row in source.get('missing', []) + source.get('available', []) if row.get('requested_at')]
+        for old in tracked:
+            matches = [row for row in replacement['missing'] + replacement.get('available', [])
+                       if id_relation(old, row) == 'match' or (id_relation(old, row) != 'conflict'
+                       and old.get('media_type') == row.get('media_type')
+                       and providers.clean(old['title']) == providers.clean(row['title']) and old['year'] == row['year'])]
+            if len(matches) == 1:
+                matches[0].update({key: copy.deepcopy(value) for key, value in old.items()
+                                   if key.startswith('request') or key in {'external_ids', 'metadata', 'metadata_status', 'external_source'}})
+            elif not matches:
+                replacement['missing'].append(copy.deepcopy(old))
+        replacement['auto_add_arrivals'] = bool(tracked) or replacement.get('auto_add_arrivals', False)
         reconcile_suggestions(replacement, state["library"])
         self.store.backup()
         progress("Applying the reviewed membership changes to Plex…")

@@ -11,7 +11,7 @@ from plexapi.server import PlexServer
 from plexapi.exceptions import PlexApiException
 
 from .store import DomainError
-from .matching import external_ids
+from .matching import external_ids, catalog_matches
 
 
 def clean(value):
@@ -293,8 +293,7 @@ def title_metadata(settings, item, *, strict=False):
         return None
     if not isinstance(results, list):
         return None
-    matches = [row for row in results if isinstance(row, dict)
-               and catalog_title_matches(row, item)]
+    matches = catalog_matches(item, results)
     if len(matches) != 1:
         return None
     match = matches[0]
@@ -319,12 +318,17 @@ def request_title(settings, item):
     if root not in {r["path"] for r in roots} or profile not in {p["id"] for p in profiles}:
         raise DomainError(f"Choose a valid {service.title()} root folder and quality profile in Settings.")
     kind = "series" if service == "sonarr" else "movie"
-    results = arr_request(settings, service, "GET", "/" + kind + "/lookup", params={"term": item["title"]})
-    matches = [r for r in results if isinstance(r, dict) and catalog_title_matches(r, item)]
+    provider = 'tvdb' if service == 'sonarr' else 'tmdb'
+    known = external_ids(item)
+    term = f'{provider}:{known[provider]}' if provider in known else item['title']
+    results = arr_request(settings, service, "GET", "/" + kind + "/lookup", params={"term": term})
+    matches = catalog_matches(item, results)
     if len(matches) != 1:
         raise DomainError("Could not find one exact title/year match. Review the title in your Arr app.")
     match = matches[0]
     identity = "tvdbId" if service == "sonarr" else "tmdbId"
+    if type(match.get(identity)) is not int or match[identity] <= 0:
+        raise DomainError('The catalog returned no valid external identity. Check the title in your Arr app.')
     existing = arr_request(settings, service, "GET", "/" + kind)
     if any(row.get(identity) == match.get(identity) for row in existing):
         return "Already in " + service.title()

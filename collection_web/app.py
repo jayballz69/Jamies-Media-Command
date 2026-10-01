@@ -416,6 +416,8 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
             return job("Apply improvements", lambda progress: service.apply_improvement(identity, progress))
         if action == "request":
             payload = body()
+            if 'selections' not in payload:
+                raise DomainError('Reload the app and confirm the titles again. This request uses an outdated selection format.')
             return job("Request missing titles", lambda progress: service.request_missing(identity, payload, progress))
         if action == "add":
             payload = body()
