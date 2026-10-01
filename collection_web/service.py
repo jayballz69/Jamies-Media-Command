@@ -239,6 +239,12 @@ class Service:
             # Provider exceptions may contain token-bearing URLs. Never serialize them.
             message = str(exc) if isinstance(exc, DomainError) else "The service could not complete the task. Check the connection and retry."
             LOG.error("Task %s failed (%s)", identity, type(exc).__name__)
+            from .diagnostics import record_error
+            try:
+                reference = record_error(self.store, exc, job_id=identity)
+                message += ' Diagnostic reference: ' + reference + '.'
+            except Exception as diagnostic_error:
+                LOG.error('Diagnostic capture failed (%s)', type(diagnostic_error).__name__)
             self._job(identity, status="failed", message=message, finished_at=time.time())
             self.store.update(lambda state: event(state, message, "error"))
         finally:
@@ -1141,6 +1147,11 @@ class Service:
                     continue
                 except Exception as exc:
                     LOG.error("Schedule check failed (%s)", type(exc).__name__)
+                    from .diagnostics import record_error
+                    try:
+                        record_error(self.store, exc, context='scheduler')
+                    except Exception as diagnostic_error:
+                        LOG.error('Diagnostic capture failed (%s)', type(diagnostic_error).__name__)
         self.scheduler = threading.Thread(target=loop, name="schedule", daemon=True)
         self.scheduler.start()
 

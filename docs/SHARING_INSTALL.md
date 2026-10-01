@@ -214,6 +214,23 @@ explains that relationship.
 
 ## Share source, not your instance
 
+### Send a diagnostic report
+
+When a task fails, open **Activity > Export diagnostics** and send the downloaded
+`collection-manager-diagnostics.json` to your helper. After installing this
+feature, retry the failing action once to capture its code locations, then export.
+Previous failures cannot gain a traceback retroactively. Successful items in a
+partial batch stay saved; check their state before retrying.
+
+The report contains recent task IDs/status/timestamps, up to 100 captured errors
+with exception types and application code locations, dependency versions, a
+fingerprint of the running code, counts and connection-configured flags. This
+helps distinguish an updated checkout from an older container still running.
+It excludes exception messages, local variables, credentials, service addresses,
+library/collection titles, user activity text, raw logs and database contents.
+Signing in is required to export. Reports download only when you request them;
+the app does not send them anywhere automatically.
+
 Share the clean repository URL and this guide. Never include `.env`, the data
 directory, password files, integration keys, database copies, migration input,
 backups or browser/deployment artifacts. `.env` and the default `web-data/`

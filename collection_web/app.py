@@ -103,7 +103,13 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
         if isinstance(error, HTTPException):
             return jsonify(error=error.description), error.code
         logging.getLogger(__name__).error("API failure (%s)", type(error).__name__)
-        return jsonify(error="The request could not be completed. Check Activity and try again."), 500
+        from .diagnostics import record_error
+        message = 'The request could not be completed. Export diagnostics from Activity.'
+        try:
+            message += ' Reference: ' + record_error(store, error, context='api') + '.'
+        except Exception as diagnostic_error:
+            logging.getLogger(__name__).error('Diagnostic capture failed (%s)', type(diagnostic_error).__name__)
+        return jsonify(error=message), 500
 
     def body():
         value = request.get_json()
@@ -484,6 +490,15 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
                 "opportunities": [portable(c) for c in state["drift"].get("opportunities", [])]}
         return send_file(io.BytesIO(json.dumps(data, ensure_ascii=False, indent=2).encode()),
                          mimetype="application/json", as_attachment=True, download_name="collection-manager-export.json")
+
+    @app.get('/api/diagnostics/export')
+    def export_diagnostics():
+        from .diagnostics import export_report
+        response = send_file(io.BytesIO(json.dumps(export_report(store), indent=2).encode()),
+                         mimetype='application/json', as_attachment=True,
+                         download_name='collection-manager-diagnostics.json')
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.get("/api/artwork/<identity>")
     def artwork(identity):

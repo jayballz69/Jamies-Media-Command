@@ -717,6 +717,19 @@ def exercise_expired_dialogs(page, backend, passed):
     passed.append('Expired authentication closes and clears nested dialogs so mobile sign-in is usable')
 
 
+def exercise_diagnostic_download(page, passed):
+    page.goto(ORIGIN + '/#activity')
+    page.reload()
+    page.route('**/api/diagnostics/export', lambda route: route.fulfill(
+        content_type='application/json', headers={'Content-Disposition':'attachment; filename=collection-manager-diagnostics.json'},
+        body='{"schema":1,"errors":[]}'))
+    with page.expect_download() as download:
+        page.get_by_role('link', name='Export diagnostics').click()
+    assert download.value.suggested_filename == 'collection-manager-diagnostics.json', download.value.suggested_filename
+    page.unroute('**/api/diagnostics/export')
+    passed.append('Activity exports diagnostics as a JSON download from the phone layout')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-channel", default="chrome")
@@ -748,13 +761,14 @@ def main() -> int:
                 exercise_arrival_acceptance(page, backend, passed)
                 exercise_remember_device(page, passed)
                 exercise_expired_dialogs(page, backend, passed)
+                exercise_diagnostic_download(page, passed)
             finally:
                 browser.close()
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
 
     success = (
-        len(passed) == 29
+        len(passed) == 30
         and not failure
         and not page_errors
         and not backend.unexpected_requests
