@@ -36,6 +36,44 @@ def response():
                          dict(id='3', matches=[])]}
 
 
+def test_accept_all_keeps_successes_and_failed_suggestions(setup):
+    store, service = setup
+    with patch('collection_web.integrations.call_llm', return_value=response()):
+        service.review_new_arrivals(lambda _: None)
+    first = store.read()['new_arrivals']['suggestions'][0]
+    store.update(lambda s: s['new_arrivals']['suggestions'].append(dict(first, id='bad', theme_revision='outdated')))
+    with patch('collection_web.integrations.publish') as publish:
+        with pytest.raises(DomainError, match='Accepted 1 additions; 1 could not finish'):
+            arrivals.accept_additions(service, ['bad', first['id'], first['id']], lambda _: None)
+    assert publish.call_count == 1
+    rows = store.read()['new_arrivals']['suggestions']
+    assert rows[0]['status'] == 'added'
+    assert rows[1]['status'] == 'pending'
+    with patch.object(service, 'act_on_arrival') as add:
+        assert '0 additions' in arrivals.accept_additions(service, [first['id']], lambda _: None)
+        add.assert_not_called()
+
+
+def test_rejected_arrival_is_not_marked_accepted(setup):
+    store, service = setup
+    with patch('collection_web.integrations.call_llm', return_value=response()):
+        service.review_new_arrivals(lambda _: None)
+    identity = store.read()['new_arrivals']['suggestions'][0]['id']
+    with patch.object(service, '_add_items', return_value=0):
+        with pytest.raises(DomainError, match='fit review'):
+            service.act_on_arrival(identity, 'add', lambda _: None)
+    assert store.read()['new_arrivals']['suggestions'][0]['status'] == 'pending'
+
+
+@pytest.mark.parametrize('ids', [None, [], 'all', [1], ['x'] * 1001])
+def test_accept_all_rejects_invalid_snapshot(setup, ids):
+    _, service = setup
+    with patch.object(service, 'act_on_arrival') as add:
+        with pytest.raises(DomainError):
+            arrivals.accept_additions(service, ids, lambda _: None)
+        add.assert_not_called()
+
+
 def test_baseline_disabled_and_reimports_are_not_new(setup):
     store, _ = setup
     s = store.read()
@@ -167,11 +205,18 @@ def test_arrival_routes_require_authentication_and_csrf(tmp_path):
     try:
         client = app.test_client()
         assert client.post('/api/arrivals/review',json={}).status_code == 401
+        assert client.post('/api/arrivals/accept-all',json={'ids':['x']}).status_code == 401
         session = client.post('/api/login',json={'password':'test-password-for-arrivals'}).get_json()
         assert client.post('/api/arrivals/x/add',json={}).status_code == 403
+        assert client.post('/api/arrivals/accept-all',json={'ids':['x']}).status_code == 403
         with patch.object(service,'submit',return_value={'id':'job'}) as submit:
             assert client.post('/api/arrivals/review',json={},headers={'X-CSRF-Token':session['csrf']}).status_code == 202
             assert submit.call_args.args[1] == service.review_new_arrivals
             assert client.post('/api/arrivals/x/dismiss',json={},headers={'X-CSRF-Token':session['csrf']}).status_code == 202
+            with patch.object(arrivals, 'accept_additions', return_value='Accepted') as accept:
+                assert client.post('/api/arrivals/accept-all',json={'ids':['x']},headers={'X-CSRF-Token':session['csrf']}).status_code == 202
+                progress = lambda _: None
+                submit.call_args.args[1](progress)
+                accept.assert_called_once_with(service, ['x'], progress)
     finally:
         service.close()

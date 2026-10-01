@@ -267,6 +267,12 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
     def arrival_action(identity, action):
         return job("Review arrival suggestion", lambda progress: service.act_on_arrival(identity, action, progress))
 
+    @app.post("/api/arrivals/accept-all")
+    def accept_arrival_additions():
+        from .new_arrivals import accept_additions
+        identities = body().get('ids')
+        return job('Accept reviewed additions', lambda progress: accept_additions(service, identities, progress))
+
     @app.post("/api/library/sync")
     def sync():
         return job("Sync library", service.sync)

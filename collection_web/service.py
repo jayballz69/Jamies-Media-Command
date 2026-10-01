@@ -1023,7 +1023,9 @@ class Service:
             if item['media_type'] != candidate['media_type']:
                 raise DomainError('The title no longer matches this collection’s library.')
             if str(item['id']) not in {str(i['id']) for i in candidate['items']}:
-                self._add_items(candidate, [dict(item, reason=suggestion['reason'])], state, progress)
+                added = self._add_items(candidate, [dict(item, reason=suggestion['reason'])], state, progress)
+                if not added:
+                    raise DomainError('The addition did not pass the collection fit review. It remains here for review.')
         def save(current):
             target = next(s for s in current['new_arrivals']['suggestions'] if s['id'] == identity)
             target.update(status='added' if action == 'add' else 'dismissed', handled_at=time.time())

@@ -126,6 +126,14 @@ class MockBackend:
             self.writes.append({"method": request.method, "path": path, "body": body})
             self.state["settings"].update(body)
             payload = {"ok": True}
+        elif path.startswith('/api/arrivals/') and request.method == 'POST':
+            body = request.post_data_json
+            self.writes.append({'method': 'POST', 'path': path, 'body': body})
+            ids = body['ids'] if path.endswith('/accept-all') else [path.split('/')[-2]]
+            for row in self.state.get('new_arrivals', {}).get('suggestions', []):
+                if row['id'] in ids:
+                    row['status'] = 'added'
+            payload = self.completed_job('Accept reviewed additions')
         elif path in {"/api/collections", "/api/collections/discover"} and request.method == "POST":
             if request.headers.get("x-csrf-token") != "isolated-test-token":
                 self.reject(route)
@@ -650,6 +658,27 @@ def exercise_mobile_requests(page, backend, passed):
     passed.append('Phone single-title request sends only the selected suggestion')
 
 
+def exercise_arrival_acceptance(page, backend, passed):
+    backend.state['new_arrivals'] = {'suggestions': [
+        {'id': f'new-{i}', 'item_id': f'item-{i}', 'title': f'Arrival {i}', 'year': 2024,
+         'media_type': 'movie', 'collection_id': 'source', 'status': 'pending', 'reason': 'Fits the theme.'}
+        for i in range(3)]}
+    page.goto(ORIGIN + '/#collections')
+    page.reload()
+    page.locator('#arrival-inbox-shell > summary').click()
+    page.locator('#arrival-additions > summary').click()
+    page.locator('[data-action="arrival-add"][data-id="new-0"]').click()
+    expect(page.locator('[data-arrival-suggestion="new-0"]')).to_have_count(0)
+    expect(page.locator('#arrival-additions')).to_have_attribute('open', '')
+    advance_poll(page, 16000)
+    expect(page.locator('[data-action="arrival-add"][data-id="new-1"]')).to_be_visible()
+    page.locator('[data-action="arrival-accept-all"]').click()
+    expect(page.locator('[data-arrival-suggestion]')).to_have_count(0)
+    assert backend.latest_payload('/api/arrivals/accept-all') == {'ids': ['new-1', 'new-2']}
+    expect(page.locator('#arrival-inbox-shell')).to_have_attribute('open', '')
+    passed.append('Arrival review stays expanded after individual additions and bulk accepts the remaining snapshot')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-channel", default="chrome")
@@ -678,13 +707,14 @@ def main() -> int:
                 exercise_discovery_workflows(page, backend, passed)
                 exercise_curator_settings(page, backend, passed)
                 exercise_mobile_requests(page, backend, passed)
+                exercise_arrival_acceptance(page, backend, passed)
             finally:
                 browser.close()
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
 
     success = (
-        len(passed) == 26
+        len(passed) == 27
         and not failure
         and not page_errors
         and not backend.unexpected_requests

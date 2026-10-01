@@ -9,6 +9,28 @@ from .store import DomainError
 BATCH_SIZE = 40
 
 
+def accept_additions(service, identities, progress):
+    """Accept the reviewed snapshot sequentially, retaining failures for retry."""
+    if not isinstance(identities, list) or not identities or len(identities) > 1000 or any(not isinstance(i, str) for i in identities):
+        raise DomainError('Choose between 1 and 1000 reviewed additions.')
+    identities = list(dict.fromkeys(identities))
+    pending = {s['id'] for s in service.store.read().get('new_arrivals', {}).get('suggestions', []) if s['status'] == 'pending'}
+    done, skipped, failures = 0, 0, []
+    for identity in identities:
+        if identity not in pending:
+            skipped += 1
+            continue
+        try:
+            service.act_on_arrival(identity, 'add', progress)
+            done += 1
+        except DomainError as error:
+            failures.append(str(error))
+        progress(f'Accepted {done} additions; {len(failures)} need attention.')
+    if failures:
+        raise DomainError(f'Accepted {done} additions; {len(failures)} could not finish and remain for review. ' + failures[0])
+    return f'Accepted {done} additions. {skipped} already handled or no longer pending.'
+
+
 def title_key(item):
     # Reimports and new episodes of an existing series are not new titles.
     return json.dumps([item['media_type'], str(item.get('library_id', '')),
