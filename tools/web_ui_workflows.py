@@ -589,6 +589,27 @@ def exercise_discovery_workflows(page: Page, backend: MockBackend, passed: list[
     passed.append("History Keep restores a shelf and The Connection can refresh in place")
 
 
+def exercise_curator_settings(page, backend, passed):
+    """Verify preset, persistence and custom-provider preservation without AI calls."""
+    page.goto(ORIGIN + "/#settings")
+    page.locator('[data-curator-preset]').select_option('gpt-6-luna')
+    expect(page.locator('[name=llm_model]')).to_have_value('gpt-6-luna')
+    expect(page.locator('[name=llm_url]')).to_have_value('https://api.openai.com/v1')
+    advance_poll(page, 16000)
+    expect(page.locator('[name=llm_model]')).to_have_value('gpt-6-luna')
+    page.locator('#settings-form [type=submit]').click()
+    expect(page.locator('#settings-save-note')).not_to_have_text('You have unsaved changes.')
+    assert backend.latest_payload('/api/settings')['llm_model'] == 'gpt-6-luna'
+    page.reload()
+    expect(page.locator('[data-curator-preset]')).to_have_value('gpt-6-luna')
+    page.locator('[name=llm_url]').fill('http://custom-provider:11434/v1')
+    page.locator('[data-curator-preset]').select_option('custom')
+    page.locator('[name=llm_model]').fill('my-local-model')
+    page.locator('[data-curator-preset]').select_option('gpt-6-luna')
+    expect(page.locator('[name=llm_url]')).to_have_value('http://custom-provider:11434/v1')
+    passed.append('Luna preset persists across reloads and preserves custom provider addresses')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-channel", default="chrome")
@@ -615,13 +636,14 @@ def main() -> int:
                 page.on("pageerror", lambda error: page_errors.append(str(error)))
                 exercise_workflows(page, backend, passed)
                 exercise_discovery_workflows(page, backend, passed)
+                exercise_curator_settings(page, backend, passed)
             finally:
                 browser.close()
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
 
     success = (
-        len(passed) == 23
+        len(passed) == 24
         and not failure
         and not page_errors
         and not backend.unexpected_requests

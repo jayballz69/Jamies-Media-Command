@@ -493,7 +493,7 @@ function renderSettings() {
       ${service('Tautulli', 'tautulli', field('tautulli_url', 'Server URL', s.tautulli_url, {placeholder: 'http://tautulli:8181'}) + field('tautulli_key', 'API key', '', {secret: true, saved: s.has_tautulli_key}), s.has_tautulli_key, 'Household inspiration')}
       </section>
       <section class="settings-section panel"><div class="settings-section-heading"><div><h2>Discovery & requests</h2><p>Find stronger themes and request missing titles from the app.</p></div>${icon('drift')}</div>
-      ${service('Theme & naming model', 'llm', field('llm_url', 'OpenAI-compatible API URL', s.llm_url, {placeholder: 'http://ollama:11434/v1', hint: 'Use an API that supports chat completions.'}) + field('llm_model', 'Model name', s.llm_model, {placeholder: 'Your installed model'}) + field('llm_key', 'API key', '', {secret: true, saved: s.has_llm_key, full: true, hint: 'Only needed when your provider requires one.'}), !!s.llm_url, 'Collection ideas & titles')}
+      ${service('Theme & naming model', 'llm', `<label class="field full"><span>Curator model</span><select data-curator-preset><option value="custom" ${s.llm_model !== 'gpt-6-luna' ? 'selected' : ''}>Custom / existing model</option><option value="gpt-6-luna" ${s.llm_model === 'gpt-6-luna' ? 'selected' : ''}>GPT-6 Luna — recommended for Drift</option></select><small>Applies to Drift, Improve and other AI curation. Save & test makes one small, billed model request; check Activity for the result.</small></label>` + field('llm_url', 'OpenAI-compatible API URL', s.llm_url, {placeholder: 'https://api.openai.com/v1', hint: 'For OpenAI Luna use https://api.openai.com/v1 and your OpenAI API key. Custom providers must offer the model below.'}) + field('llm_model', 'Model name', s.llm_model, {placeholder: 'gpt-6-luna', hint: 'Exact API model ID. Custom providers and local Ollama remain supported.'}) + field('llm_key', 'API key', '', {secret: true, saved: s.has_llm_key, full: true, hint: 'Use the key for the API address above. Replace the saved key when changing provider.'}), !!s.llm_url, s.llm_model ? `Saved model: ${esc(s.llm_model)}` : 'Choose a curator')}
       ${service('Radarr', 'radarr', field('radarr_url', 'Server URL', s.radarr_url, {placeholder: 'http://radarr:7878'}) + field('radarr_key', 'API key', '', {secret: true, saved: s.has_radarr_key}) + connectionSelect('radarr', 'root', 'Movie folder', s.radarr_root) + connectionSelect('radarr', 'profile', 'Quality profile', s.radarr_profile), s.has_radarr_key, 'Movie requests')}
       ${service('Sonarr', 'sonarr', field('sonarr_url', 'Server URL', s.sonarr_url, {placeholder: 'http://sonarr:8989'}) + field('sonarr_key', 'API key', '', {secret: true, saved: s.has_sonarr_key}) + connectionSelect('sonarr', 'root', 'TV folder', s.sonarr_root) + connectionSelect('sonarr', 'profile', 'Quality profile', s.sonarr_profile), s.has_sonarr_key, 'TV requests')}
       <section class="service-section"><div class="service-heading"><div class="service-name"><i class="service-indicator ${s.has_trakt_client_id ? 'configured' : ''}" aria-hidden="true"></i><strong>Trakt</strong><small>Public list imports</small></div></div>${field('trakt_client_id', 'Trakt application client ID', '', {secret: true, saved: s.has_trakt_client_id, hint: 'Used to read the public Trakt lists you import.'})}</section>
@@ -816,6 +816,21 @@ document.addEventListener('toggle', event => {
   if (event.target.id === 'arrival-inbox-shell' && event.target.isConnected) arrivalInboxOpen = event.target.open;
 }, true);
 document.addEventListener('change', async event => {
+  if (event.target.matches('[data-curator-preset]')) {
+    const form = event.target.form;
+    if (event.target.value === 'gpt-6-luna') {
+      form.elements.llm_model.value = 'gpt-6-luna';
+      if (!form.elements.llm_url.value.trim() && !state.settings?.has_llm_key) form.elements.llm_url.value = 'https://api.openai.com/v1';
+    } else {
+      form.elements.llm_model.focus();
+    }
+    settingsDirty = true;
+    document.querySelector('#settings-save-note').textContent = 'You have unsaved changes.';
+    return;
+  }
+  if (event.target.matches('#settings-form [name=llm_model]')) {
+    event.target.form.querySelector('[data-curator-preset]').value = event.target.value.trim() === 'gpt-6-luna' ? 'gpt-6-luna' : 'custom';
+  }
   if (['collection-media', 'collection-sort', 'collection-status'].includes(event.target.id)) {
     if (event.target.id === 'collection-media') mediaFilter = event.target.value;
     else if (event.target.id === 'collection-status') filter = event.target.value;

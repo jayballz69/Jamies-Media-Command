@@ -109,6 +109,40 @@ container needs a shared network and the app's internal port `8780`.
 
 ## Back up and upgrade
 
+### Select Luna after updating
+
+Pull and rebuild using the upgrade instructions below; `docker compose restart`
+alone keeps the old code. Then reload the browser (close and reopen an nzb360
+Web Interface if its Settings page still looks old).
+
+1. Open **Settings > Discovery & requests > Theme & naming model**.
+2. Choose **GPT-6 Luna — recommended for Drift**. The exact model ID is
+   `gpt-6-luna`. Existing saved model choices are preserved during upgrades;
+   select Luna explicitly to change them.
+3. For OpenAI directly, set **API URL** to `https://api.openai.com/v1` and enter
+   your own OpenAI API key. Choosing Luna preserves any existing provider URL;
+   change it yourself if moving from Ollama or another provider, and replace that
+   provider's saved key. A compatible gateway must actually offer this model.
+4. Click this section's **Save & test**. It makes one small billed generation
+   request using the saved model, with a 1,024-token output ceiling. In **Activity**,
+   look for **Curator gpt-6-luna responded successfully**. A reachable model-list
+   endpoint alone no longer counts as a successful test. Failures do not silently
+   switch to another model. Check the provider URL, model access, API key and
+   billing if the test fails.
+5. Reload Settings and confirm **Saved model: gpt-6-luna**. Sync the library if
+   needed, then use **Drift > Generate ideas** once. Review the resulting pool;
+   existing collections are not rewritten simply by changing the model. To
+   change an existing collection, use **Improve collection**.
+
+The saved model applies to scheduled and manual Drift, improvements and other AI
+curation. Luna uses the existing creative-editor path and low reasoning effort;
+generation remains bounded. Better model configuration does not guarantee every
+collection will be a good fit; the friend's library metadata also matters.
+The public API ID and supported endpoints are documented in
+[OpenAI's Luna model reference](https://developers.openai.com/api/docs/models/gpt-6-luna).
+
+### Upgrade commands
+
 The data directory contains your SQLite state, login material, stored integration
 credentials and automatic backups. Keep it private and back it up separately
 from source code. The commands below assume the default `./web-data`; substitute

@@ -98,7 +98,7 @@ def scan_library(settings, progress):
     return rows, shelves, server.machineIdentifier
 
 
-def call_llm(settings, prompt, usage=None):
+def call_llm(settings, prompt, usage=None, *, max_output_tokens=None):
     if not settings.get("llm_url") or not settings.get("llm_model"):
         raise DomainError("Add a curator model and its API address in Settings. Use an OpenAI-compatible /v1 endpoint, including local Ollama.")
     headers = {"Authorization": "Bearer " + settings["llm_key"]} if settings.get("llm_key") else {}
@@ -108,6 +108,8 @@ def call_llm(settings, prompt, usage=None):
                     "response_format": {"type": "json_object"}}
     if settings["llm_model"] == "gpt-6-luna":
         payload.update(reasoning_effort="low", max_completion_tokens=16000)
+    if max_output_tokens is not None:
+        payload["max_completion_tokens"] = max_output_tokens
     response = http("POST", settings["llm_url"].rstrip("/") + "/chat/completions", headers=headers,
                     timeout=(10, 240), json=payload)
     raw = response.json()
@@ -246,10 +248,8 @@ def test_connection(settings, service):
     if service == "plex":
         plex(settings)
     elif service == "llm":
-        if not settings.get("llm_url"):
-            raise DomainError("Set the curator API address first.")
-        headers = {"Authorization": "Bearer " + settings["llm_key"]} if settings.get("llm_key") else {}
-        http("GET", settings["llm_url"].rstrip("/") + "/models", headers=headers)
+        call_llm(settings, 'Connection check only. Return {"ok":true}.', max_output_tokens=1024)
+        return f"Curator {settings['llm_model']} responded successfully. Future curation uses this saved model."
     elif service == "tautulli":
         if not settings.get("tautulli_url") or not settings.get("tautulli_key"):
             raise DomainError("Set Tautulli's address and API key first.")

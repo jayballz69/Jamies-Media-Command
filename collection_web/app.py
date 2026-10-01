@@ -223,8 +223,8 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
     def test_connection():
         name = body().get("service")
         def run(progress):
-            providers.test_connection(store.read()["settings"], name)
-            return str(name).title() + " connected successfully."
+            result = providers.test_connection(store.read()["settings"], name)
+            return result or str(name).title() + " connected successfully."
         return job("Test connection", run)
 
     @app.get("/api/library")
