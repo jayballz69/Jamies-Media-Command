@@ -50,6 +50,14 @@ On first open, choose your own username and password (at least 12 characters),
 confirm the password and select **Create account**. Later visits require both.
 There is no predetermined password. The account is stored as a password hash in
 the private data directory and survives container rebuilds.
+**Remember this device** is enabled by default on the sign-in and setup screens.
+It keeps this browser signed in for 180 days, renewed when you use the app.
+Uncheck it on shared devices: that sign-in uses a browser-session cookie with a
+12-hour inactivity limit. Signing out clears the session on that browser.
+After upgrading from the older session format, sign in once to save this choice.
+Use the same address consistently: LAN IP, Tailscale IP and hostnames have
+separate browser cookies. Private browsing or clearing app/browser data removes
+the remembered session; the app cannot override that device behaviour.
 With the loopback default, use a browser on the VM or an SSH tunnel.
 The image's health check checks `/healthz`; `ps` should eventually show healthy.
 

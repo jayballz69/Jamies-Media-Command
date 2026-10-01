@@ -679,6 +679,27 @@ def exercise_arrival_acceptance(page, backend, passed):
     passed.append('Arrival review stays expanded after individual additions and bulk accepts the remaining snapshot')
 
 
+def exercise_remember_device(page, passed):
+    page.route('**/api/session', lambda route: route.fulfill(json={'authenticated':False, 'csrf':'isolated-test-token'}))
+    submitted = []
+    def sign_in(route):
+        submitted.append(route.request.post_data_json)
+        route.fulfill(json={'authenticated':True, 'csrf':'isolated-test-token'})
+    page.route('**/api/login', sign_in)
+    for remember in (True, False):
+        page.reload()
+        expect(page.locator('[name=remember_device]')).to_be_checked()
+        page.locator('[name=username]').fill('test-user')
+        page.locator('[name=password]').fill('test-password')
+        page.locator('[name=remember_device]').set_checked(remember)
+        page.locator('#login-form [type=submit]').click()
+        expect(page.locator('.app-shell')).to_be_visible()
+        assert submitted[-1]['remember_device'] is remember
+    page.unroute('**/api/session')
+    page.unroute('**/api/login')
+    passed.append('Phone login defaults to remembering the device and sends an explicit boolean opt-out')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-channel", default="chrome")
@@ -708,13 +729,14 @@ def main() -> int:
                 exercise_curator_settings(page, backend, passed)
                 exercise_mobile_requests(page, backend, passed)
                 exercise_arrival_acceptance(page, backend, passed)
+                exercise_remember_device(page, passed)
             finally:
                 browser.close()
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
 
     success = (
-        len(passed) == 27
+        len(passed) == 28
         and not failure
         and not page_errors
         and not backend.unexpected_requests

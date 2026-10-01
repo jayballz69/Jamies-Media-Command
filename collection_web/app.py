@@ -50,7 +50,7 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
     app.config.update(SECRET_KEY=key, MAX_CONTENT_LENGTH=2 * 1024 * 1024,
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
                       SESSION_COOKIE_SECURE=os.environ.get("CM_SECURE_COOKIE") == "1",
-                      PERMANENT_SESSION_LIFETIME=timedelta(hours=12))
+                      PERMANENT_SESSION_LIFETIME=timedelta(days=180))
     password_hash = generate_password_hash(password) if password else None
     service = Service(store, legacy_dir or os.environ.get("CM_LEGACY_DIR"))
     app.extensions.update(collection_store=store, collection_service=service)
@@ -59,6 +59,12 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
 
     @app.before_request
     def authorize():
+        if session.get('authenticated'):
+            now = time.time()
+            if session.get('expires_at', 0) <= now:
+                session.clear()
+            else:
+                session['expires_at'] = now + (180 * 86400 if session.get('remember_device') else 12 * 3600)
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("Origin")
             expected_origin = (os.environ.get("CM_PUBLIC_ORIGIN") or request.host_url).rstrip("/")
@@ -104,6 +110,13 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
         if not isinstance(value, dict):
             raise DomainError("Send a JSON object.")
         return value
+
+    def start_session(revision, remember):
+        session.clear()
+        session.update(authenticated=True, account_revision=revision, csrf=secrets.token_urlsafe(32),
+                       remember_device=remember,
+                       expires_at=time.time() + (180 * 86400 if remember else 12 * 3600))
+        session.permanent = remember
 
     def job(kind, operation):
         return jsonify(service.submit(kind, operation)), 202
@@ -152,6 +165,9 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
             return jsonify(error="Reload the setup page and try again."), 403
         payload = body()
         username, chosen = payload.get("username", ""), payload.get("password", "")
+        remember = payload.get('remember_device', False)
+        if not isinstance(remember, bool):
+            raise DomainError('Remember this device must be on or off.')
         if not isinstance(username, str) or not 1 <= len(username.strip()) <= 64:
             raise DomainError("Choose a username between 1 and 64 characters.")
         if not isinstance(chosen, str) or not 12 <= len(chosen) <= 1024:
@@ -164,9 +180,7 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
             inserted = db.execute("INSERT OR IGNORE INTO account VALUES (1,?,?,?)", (username.strip(), hashed, revision)).rowcount
         if not inserted:
             return jsonify(error="An account already exists. Sign in instead."), 409
-        session.clear()
-        session.update(authenticated=True, account_revision=revision, csrf=secrets.token_urlsafe(32))
-        session.permanent = True
+        start_session(revision, remember)
         return jsonify(authenticated=True, csrf=session["csrf"]), 201
 
     @app.post("/api/login")
@@ -184,6 +198,9 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
             recent.append(now)
         payload = body()
         provided, username = payload.get("password", ""), payload.get("username", "")
+        remember = payload.get('remember_device', False)
+        if not isinstance(remember, bool):
+            raise DomainError('Remember this device must be on or off.')
         saved = account()
         valid_password = isinstance(provided, str) and len(provided) <= 1024
         if saved:
@@ -193,9 +210,7 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
             valid_password = valid_password and bool(password_hash) and check_password_hash(password_hash, provided)
         if not valid_password:
             return jsonify(error="The username or password is incorrect."), 401
-        session.clear()
-        session.update(authenticated=True, account_revision=saved[2] if saved else "configured", csrf=secrets.token_urlsafe(32))
-        session.permanent = True
+        start_session(saved[2] if saved else 'configured', remember)
         with login_lock:
             attempts.pop(address, None)
         return jsonify(authenticated=True, csrf=session["csrf"])

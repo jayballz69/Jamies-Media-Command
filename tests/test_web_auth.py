@@ -1,5 +1,47 @@
 """First-run account setup and persistent username/password authentication."""
 from collection_web.app import create_app
+from unittest.mock import patch
+import time
+import pytest
+
+
+@pytest.mark.parametrize('remember,days,expected', [(True, 2, 200), (True, 181, 401), (False, 1, 401)])
+def test_remembered_device_expiry_and_cookie(tmp_path, remember, days, expected):
+    app = create_app(tmp_path, password='test-password')
+    c = app.test_client()
+    try:
+        result = c.post('/api/login', json={'password': 'test-password', 'remember_device': remember})
+        assert result.status_code == 200
+        assert ('Expires=' in result.headers['Set-Cookie']) == remember
+        assert 'HttpOnly' in result.headers['Set-Cookie']
+        assert 'SameSite=Strict' in result.headers['Set-Cookie']
+        future = time.time() + days * 86400
+        with patch('collection_web.app.time.time', return_value=future):
+            assert c.get('/api/state').status_code == expected
+            assert c.get('/api/session').json['authenticated'] == (expected == 200)
+    finally:
+        app.extensions['collection_service'].close()
+
+
+def test_remembered_session_survives_restart_renews_and_logs_out(tmp_path):
+    app = create_app(tmp_path, password='test-password')
+    c = app.test_client()
+    login = c.post('/api/login', json={'password':'test-password', 'remember_device':True})
+    cookie = c.get_cookie('session').value
+    app.extensions['collection_service'].close()
+    restarted = create_app(tmp_path, password='test-password')
+    c = restarted.test_client()
+    c.set_cookie('session', cookie)
+    try:
+        now = time.time()
+        with patch('collection_web.app.time.time', return_value=now + 179 * 86400):
+            assert c.get('/api/state').status_code == 200
+        with patch('collection_web.app.time.time', return_value=now + 200 * 86400):
+            assert c.get('/api/state').status_code == 200
+            assert c.post('/api/logout', json={}, headers={'X-CSRF-Token':login.json['csrf']}).status_code == 200
+            assert c.get('/api/state').status_code == 401
+    finally:
+        restarted.extensions['collection_service'].close()
 
 
 def test_first_run_account_setup_persists_and_cannot_be_overwritten(tmp_path):
