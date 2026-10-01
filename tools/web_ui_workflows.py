@@ -203,12 +203,13 @@ class MockBackend:
                 row["items"].append(chosen)
                 row["available"] = [item for item in row["available"] if item["id"] != chosen["id"]]
                 payload = self.completed_job("Add library suggestion")
-            elif request.method == "POST" and parts[3:] == ["request"] and identity.startswith("pasted-"):
+            elif request.method == "POST" and parts[3:] == ["request"]:
                 if self.fail_next_missing_request:
                     self.fail_next_missing_request = False
                     route.fulfill(status=503, content_type="application/json", body=json.dumps({"error": "The request service is temporarily unavailable."}))
                     return
-                for item in row["missing"]:
+                selected = row["missing"] if body.get("all") else [row["missing"][body["index"]]]
+                for item in selected:
                     item["requested_at"] = 1700000000
                 payload = self.completed_job("Request missing titles")
             else:
@@ -610,6 +611,45 @@ def exercise_curator_settings(page, backend, passed):
     passed.append('Luna preset persists across reloads and preserves custom provider addresses')
 
 
+def exercise_mobile_requests(page, backend, passed):
+    """Embedded browsers may suppress native confirm; requests must still work."""
+    page.add_init_script('window.confirm = () => false;')
+    backend.state['collections'].append(collection('phone-request', missing=[
+        dict(SAMPLE_ITEM, id='missing-one', title='Missing One'),
+        dict(SAMPLE_ITEM, id='missing-two', title='Missing Two')]))
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.goto(ORIGIN + '/#collections')
+    page.reload()
+    page.locator('[data-action="open"][data-id="phone-request"]').click()
+    page.locator('[data-action="request-all"]').click()
+    expect(page.locator('#request-dialog')).to_be_visible()
+    expect(page.locator('#request-title')).to_have_text('Request 2 missing titles?')
+    page.locator('[data-request-close]').click()
+    assert not any(w['path'] == '/api/collections/phone-request/request' for w in backend.writes)
+    page.locator('[data-action="request-all"]').click()
+    backend.fail_next_missing_request = True
+    page.locator('[data-request-confirm]').click()
+    expect(page.locator('[data-request-status]')).to_contain_text('temporarily unavailable')
+    expect(page.locator('[data-request-confirm]')).to_be_enabled()
+    page.locator('[data-request-confirm]').click()
+    expect(page.locator('[data-request-status]')).to_have_text('Test draft operation completed.')
+    expect(page.locator('[data-request-confirm]')).to_be_hidden()
+    assert backend.latest_payload('/api/collections/phone-request/request') == {'all': True}
+    page.locator('[data-request-close]').click()
+    expect(page.locator('#collection-dialog')).to_be_visible()
+    passed.append('Phone bulk requests work without native confirm; Cancel is inert and errors remain visible with retry')
+    for item in backend.collection('phone-request')['missing']:
+        item.pop('requested_at', None)
+    advance_poll(page, 16000)
+    page.locator('[data-action="request"][data-index="1"]').click()
+    expect(page.locator('#request-title')).to_have_text('Request Missing Two?')
+    page.locator('[data-request-confirm]').click()
+    expect(page.locator('[data-request-confirm]')).to_be_hidden()
+    assert backend.latest_payload('/api/collections/phone-request/request') == {'index': 1}
+    assert not backend.collection('phone-request')['missing'][0].get('requested_at')
+    passed.append('Phone single-title request sends only the selected suggestion')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-channel", default="chrome")
@@ -637,13 +677,14 @@ def main() -> int:
                 exercise_workflows(page, backend, passed)
                 exercise_discovery_workflows(page, backend, passed)
                 exercise_curator_settings(page, backend, passed)
+                exercise_mobile_requests(page, backend, passed)
             finally:
                 browser.close()
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
 
     success = (
-        len(passed) == 24
+        len(passed) == 26
         and not failure
         and not page_errors
         and not backend.unexpected_requests

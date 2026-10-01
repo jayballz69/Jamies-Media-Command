@@ -62,6 +62,61 @@ let lastStateFingerprint = '';
 const collectionEdits = new Map();
 const connectionOptionRequests = new Map();
 const improvementJobs = new Map();
+let requestDialog = null;
+let requestJobId = null;
+
+function renderRequestStatus() {
+  if (!requestDialog?.open || !requestJobId) return;
+  const job = list(state?.jobs).find(row => row.id === requestJobId);
+  if (!job) return;
+  const note = requestDialog.querySelector('[data-request-status]');
+  note.textContent = job.message || 'Sending requests…';
+  note.className = job.status === 'failed' ? 'form-error' : 'detail-note';
+  requestDialog.querySelector('[data-request-close]').textContent = job.status === 'running' ? 'Keep browsing' : 'Done';
+}
+
+function openRequestConfirmation(id, index = null) {
+  if (requestDialog?.open) return;
+  const collection = getCollection(id);
+  if (!collection) return;
+  const service = typeIcon(collection.media_type) === 'tv' ? 'Sonarr' : 'Radarr';
+  const selected = index === null ? list(collection.missing).filter(requestable) : [list(collection.missing)[index]].filter(Boolean);
+  if (!selected.length) return;
+  requestDialog?.remove();
+  requestJobId = null;
+  requestDialog = document.createElement('dialog');
+  requestDialog.className = 'create-dialog';
+  requestDialog.id = 'request-dialog';
+  requestDialog.setAttribute('aria-labelledby', 'request-title');
+  requestDialog.innerHTML = `<h2 id="request-title">Request ${selected.length === 1 ? esc(selected[0].title) : `${selected.length} missing titles`}?</h2><p>Send to ${service} using your configured quality profile and folder. This may start downloads. Arrivals will be tracked for this collection.</p><p class="detail-note" data-request-status role="status" aria-live="polite"></p><div class="actions"><button class="button ghost" type="button" data-request-close>Cancel</button><button class="button" type="button" data-request-confirm>Request in ${service}</button></div>`;
+  document.body.append(requestDialog);
+  const dialog = requestDialog;
+  dialog.querySelector('[data-request-close]').onclick = () => dialog.close();
+  dialog.querySelector('[data-request-confirm]').onclick = async event => {
+    const submit = event.currentTarget;
+    if (submit.disabled) return;
+    submit.disabled = true;
+    submit.setAttribute('aria-busy', 'true');
+    const note = dialog.querySelector('[data-request-status]');
+    note.className = 'detail-note';
+    note.textContent = `Sending your request to ${service}…`;
+    try {
+      const result = await api(`/api/collections/${encodeURIComponent(id)}/request`, {method: 'POST', body: index === null ? {all: true} : {index}});
+      requestJobId = result.id;
+      submit.style.display = 'none';
+      dialog.querySelector('[data-request-close]').textContent = 'Keep browsing';
+      await refresh({render: page !== 'settings'});
+      renderRequestStatus();
+    } catch (error) {
+      note.className = 'form-error';
+      note.textContent = error.message;
+      submit.disabled = false;
+    } finally {
+      submit.removeAttribute('aria-busy');
+    }
+  };
+  dialog.showModal();
+}
 
 function savedCollectionFields(c) {
   return {name: c.name, description: c.description || '', titles: [...list(c.items), ...list(c.missing)].map(item => `${item.title} (${item.year})`).join('\n')};
@@ -649,6 +704,7 @@ async function fetchState({render, quiet}) {
     const changed = fingerprint !== lastStateFingerprint;
     lastStateFingerprint = fingerprint;
     state = next;
+    renderRequestStatus();
     if (!document.querySelector('.app-shell')) renderShell();
     else if (page !== 'settings' && !(page === 'rotation' && rotationEdits) && (render || changed || completed)) refreshPagePreservingFocus();
     else renderJobs();
@@ -764,12 +820,7 @@ document.addEventListener('click', async event => {
     return;
   }
   if (action === 'request' || action === 'request-all') {
-    const c = getCollection(id);
-    const service = typeIcon(c?.media_type) === 'tv' ? 'Sonarr' : 'Radarr';
-    const item = list(c?.missing)[Number(el.dataset.index)];
-    const label = action === 'request-all' ? `all ${list(c?.missing).filter(requestable).length} missing titles` : `“${item?.title || item?.name || 'this title'}”`;
-    if (!confirm(`Request ${label} in ${service}? This may start downloads using your ${service} settings.`)) return;
-    return runAction(el, `/api/collections/${encodeURIComponent(id)}/request`, action === 'request-all' ? {all: true} : {index: Number(el.dataset.index)}, `Sending your request to ${service}.`);
+    return openRequestConfirmation(id, action === 'request-all' ? null : Number(el.dataset.index));
   }
   if (action === 'test') {
     const form = document.querySelector('#settings-form');
