@@ -349,7 +349,7 @@ class Service:
                 continue
             self.store.update(lambda current, name=candidate["name"], count=added_count: event(current, f"Added {count} newly available requested titles to {name}."))
 
-    def _add_items(self, candidate, additions, state, progress):
+    def _add_items(self, candidate, additions, state, progress, *, adopt_imported=False):
         if candidate.get('family_rolling'):
             raise DomainError('This shelf automatically keeps the newest 25 family movies. Use Refresh family shelf on Rotation.')
         replacement = copy.deepcopy(candidate)
@@ -366,10 +366,12 @@ class Service:
             if str(item['id']) in rejected:
                 item['arrival_review_error'] = rejected[str(item['id'])]
         if candidate["status"] == "published":
-            if not candidate.get("managed"):
+            if not candidate.get("managed") and not adopt_imported:
                 raise DomainError("Choose Manage rotation here before adding titles to this Plex collection.")
             self.store.backup()
-            providers.publish(state["settings"], replacement, state["server_id"], expected_source=candidate)
+            options = {'adopt_imported': True} if adopt_imported and not candidate.get('managed') else {}
+            providers.publish(state["settings"], replacement, state["server_id"], expected_source=candidate, **options)
+            replacement['managed'] = True
         self.store.update(lambda current: collection_by_id(current, candidate["id"]).update(replacement))
         return len({str(i['id']) for i in replacement['items']} - {str(i['id']) for i in candidate['items']})
 
@@ -382,7 +384,7 @@ class Service:
         rows = [row for row in candidate["available"] if payload.get("all") is True or str(row["id"]) == str(payload.get("item_id"))]
         if not rows:
             raise DomainError("That suggestion is no longer available to add. Refresh this collection.")
-        count = self._add_items(candidate, rows, state, progress)
+        count = self._add_items(candidate, rows, state, progress, adopt_imported=True)
         return f"Added {count} owned titles to {candidate['name']}." + (f" {len(rows)-count} remain for fit review." if count < len(rows) else '')
 
     def generate(self, progress):
@@ -1053,7 +1055,7 @@ class Service:
             if item['media_type'] != candidate['media_type']:
                 raise DomainError('The title no longer matches this collection’s library.')
             if str(item['id']) not in {str(i['id']) for i in candidate['items']}:
-                added = self._add_items(candidate, [dict(item, reason=suggestion['reason'])], state, progress)
+                added = self._add_items(candidate, [dict(item, reason=suggestion['reason'])], state, progress, adopt_imported=True)
                 if not added:
                     raise DomainError('The addition did not pass the collection fit review. It remains here for review.')
         def save(current):

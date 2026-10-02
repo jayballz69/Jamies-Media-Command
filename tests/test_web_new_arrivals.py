@@ -220,3 +220,31 @@ def test_arrival_routes_require_authentication_and_csrf(tmp_path):
                 accept.assert_called_once_with(service, ['x'], progress)
     finally:
         service.close()
+
+
+@pytest.mark.parametrize('bulk', [False, True])
+@pytest.mark.parametrize('failure', [False, True])
+def test_imported_arrivals_adopt_on_accept_without_rotation(setup, bulk, failure):
+    store, service = setup
+    store.update(lambda s: s['collections'][0].update(managed=False, rotation_enabled=False, home=False))
+    with patch('collection_web.integrations.call_llm', return_value=response()):
+        service.review_new_arrivals(lambda _: None)
+    identity = store.read()['new_arrivals']['suggestions'][0]['id']
+    def accept():
+        if bulk:
+            return arrivals.accept_additions(service, [identity], lambda _: None)
+        return service.act_on_arrival(identity, 'add', lambda _: None)
+    with patch('collection_web.integrations.publish', side_effect=DomainError('Plex changed') if failure else None) as publish:
+        if failure:
+            with pytest.raises(DomainError): accept()
+        else:
+            accept()
+        assert publish.call_args.kwargs['adopt_imported'] is True
+        assert publish.call_args.kwargs['expected_source']['managed'] is False
+    state = store.read()
+    target = state['collections'][0]
+    assert target['managed'] is (not failure)
+    assert target['rotation_enabled'] is False
+    assert target['home'] is False
+    assert [i['id'] for i in target['items']] == (['1'] if failure else ['1', '2'])
+    assert state['new_arrivals']['suggestions'][0]['status'] == ('pending' if failure else 'added')

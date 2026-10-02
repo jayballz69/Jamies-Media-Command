@@ -730,6 +730,32 @@ def exercise_diagnostic_download(page, passed):
     passed.append('Activity exports diagnostics as a JSON download from the phone layout')
 
 
+def exercise_imported_arrivals(page, backend, passed):
+    backend.state['collections'].append(collection('unmanaged-arrival',status='published',managed=False))
+    backend.state['new_arrivals']={'suggestions':[dict(id='imported-pick',collection_id='unmanaged-arrival',
+        title='A new family movie',year=2025,media_type='movie',status='pending',reason='Fits the theme.')]}
+    page.goto(ORIGIN+'/#collections');page.reload()
+    page.locator('#arrival-inbox-shell > summary').click()
+    page.locator('#arrival-additions > summary').click()
+    expect(page.locator('[data-action="arrival-accept-all"]')).to_be_enabled()
+    expect(page.locator('[data-action="arrival-add"]')).to_be_enabled()
+    page.locator('[data-action="open"][data-id="unmanaged-arrival"]').first.click()
+    expect(page.locator('#collection-dialog [data-action="arrival-add"]')).to_be_enabled()
+    page.keyboard.press('Escape')
+    page.locator('[data-action="arrival-add"]').first.click()
+    expect(page.locator('#arrival-inbox-shell [data-arrival-suggestion="imported-pick"]')).to_have_count(0)
+    assert backend.collection('unmanaged-arrival')['rotation_enabled'] is False
+    backend.state['new_arrivals']['suggestions'][0]['status'] = 'pending'
+    page.reload()
+    page.locator('#arrival-inbox-shell > summary').click()
+    page.locator('#arrival-additions > summary').click()
+    page.locator('[data-action="arrival-accept-all"]').click()
+    expect(page.locator('#arrival-inbox-shell [data-arrival-suggestion="imported-pick"]')).to_have_count(0)
+    assert backend.latest_payload('/api/arrivals/accept-all') == {'ids':['imported-pick']}
+    passed.append('Imported arrivals support direct single and bulk acceptance, including collection details')
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--browser-channel", default="chrome")
@@ -762,13 +788,14 @@ def main() -> int:
                 exercise_remember_device(page, passed)
                 exercise_expired_dialogs(page, backend, passed)
                 exercise_diagnostic_download(page, passed)
+                exercise_imported_arrivals(page, backend, passed)
             finally:
                 browser.close()
     except Exception as error:
         failure = f"{type(error).__name__}: {error}"
 
     success = (
-        len(passed) == 30
+        len(passed) == 31
         and not failure
         and not page_errors
         and not backend.unexpected_requests

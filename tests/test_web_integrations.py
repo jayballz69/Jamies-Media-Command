@@ -211,3 +211,32 @@ def test_catalog_year_suffix_resolves_jericho_without_confusing_editions():
     assert result["title"] == "Jericho"
     assert result["catalog_title"] == "Jericho (2006)"
     assert not integrations.catalog_title_matches({"title": "3", "year": 2016}, {"title": "3%", "year": 2016})
+
+
+@pytest.mark.parametrize('changed', ['', 'server', 'library', 'type', 'name', 'membership', 'item'])
+def test_imported_addition_checks_live_identity_before_adopting(changed):
+    remote, collection = server(), existing_collection()
+    collection.labels = []
+    old = remote.fetchItem.return_value
+    new = SimpleNamespace(ratingKey=13, title='Aliens', year=1986, type='movie', librarySectionID=1)
+    source = dict(shelf(), plex_id='44', status='published', managed=False)
+    candidate = dict(source, items=source['items'] + [dict(id='13',title='Aliens',year=1986,library_id='1')])
+    if changed == 'server': remote.machineIdentifier = 'other'
+    if changed == 'library': collection.librarySectionID = 2
+    if changed == 'type': collection.type = 'movie'
+    if changed == 'name': collection.title = 'Renamed'
+    if changed == 'membership': collection.items.return_value = []
+    if changed == 'item': new.year = 2000
+    remote.fetchItem.side_effect = lambda key: {44:collection,12:old,13:new}[key]
+    with patch.object(integrations, 'plex', return_value=remote):
+        if changed:
+            with pytest.raises(DomainError):
+                integrations.publish({}, candidate, 'known-server', expected_source=source, adopt_imported=True)
+            collection.addLabel.assert_not_called()
+            collection.addItems.assert_not_called()
+            collection.editSummary.assert_not_called()
+        else:
+            integrations.publish({}, candidate, 'known-server', expected_source=source, adopt_imported=True)
+            collection.addLabel.assert_called_once_with(integrations.ownership_label(candidate))
+            collection.addItems.assert_called_once_with([new])
+        collection.removeItems.assert_not_called()

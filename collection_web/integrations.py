@@ -155,11 +155,11 @@ def is_owned(labels, candidate):
     return any(str(getattr(label, "tag", label)).casefold() == expected for label in labels)
 
 
-def resolve_owned(server, candidate):
+def resolve_owned(server, candidate, *, allow_imported=False):
     if not candidate.get("plex_id"):
         return None
     collection = server.fetchItem(int(candidate["plex_id"]))
-    if not is_owned(tags(collection, "labels"), candidate):
+    if not allow_imported and not is_owned(tags(collection, "labels"), candidate):
         raise DomainError("This Plex collection is managed elsewhere. Create a new shelf to manage it here.")
     expected_library = str(candidate.get("library_id") or "")
     item_libraries = {str(row.get("library_id") or "") for row in candidate.get("items", [])}
@@ -172,7 +172,13 @@ def resolve_owned(server, candidate):
     return collection
 
 
-def publish(settings, candidate, server_id, *, expected_source=None):
+def publish(settings, candidate, server_id, *, expected_source=None, adopt_imported=False):
+    if adopt_imported and (expected_source is None or expected_source.get('managed')
+            or expected_source.get('status') != 'published'
+            or candidate['name'] != expected_source['name']
+            or not {str(i['id']) for i in expected_source['items']}.issubset(
+                {str(i['id']) for i in candidate['items']})):
+        raise DomainError('Imported collections can only be adopted through reviewed additions.')
     server = plex(settings)
     if server.machineIdentifier != server_id:
         raise DomainError("Plex server changed. Sync your library before publishing.")
@@ -190,7 +196,7 @@ def publish(settings, candidate, server_id, *, expected_source=None):
     if not verified or len({str(x.librarySectionID) for x in verified}) != 1:
         raise DomainError("A Plex collection needs owned titles from one library.")
     section = server.library.sectionByID(verified[0].librarySectionID)
-    collection = resolve_owned(server, candidate)
+    collection = resolve_owned(server, candidate, allow_imported=adopt_imported)
     if collection is None:
         if any(clean(x.title) == clean(candidate["name"]) for x in section.collections()):
             raise DomainError("That collection name already exists in Plex. Rename this draft before publishing.")
@@ -202,6 +208,8 @@ def publish(settings, candidate, server_id, *, expected_source=None):
             expected_ids = {str(row["id"]) for row in expected_source["items"]}
             if collection.title != expected_source["name"] or set(current) != expected_ids:
                 raise DomainError("The original changed in Plex after this draft was made. Sync and create a fresh improvement draft.")
+        if adopt_imported:
+            collection.addLabel(ownership_label(candidate))
         desired = {str(x.ratingKey): x for x in verified}
         if added := [x for key, x in desired.items() if key not in current]:
             collection.addItems(added)
