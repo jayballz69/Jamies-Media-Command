@@ -59,6 +59,9 @@ def create_app(data_dir=None, password=None, start_scheduler=False, legacy_dir=N
 
     @app.before_request
     def authorize():
+        from .morgin_read import PREFIX, handle
+        if request.path == PREFIX or request.path.startswith(PREFIX + '/'):
+            return handle(request, store)
         if session.get('authenticated'):
             now = time.time()
             if session.get('expires_at', 0) <= now:

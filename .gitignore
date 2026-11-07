@@ -22,6 +22,8 @@ __pycache__/
 *.p12
 admin-password.txt
 session-secret.txt
+morgin-grants.json*
+morgin-enrollment-*.json
 *.tar
 *.tar.gz
 *.zip
